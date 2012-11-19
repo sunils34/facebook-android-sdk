@@ -16,26 +16,27 @@
 
 package com.facebook.android;
 
+import android.annotation.SuppressLint;
 import android.app.Dialog;
 import android.app.ProgressDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.net.http.SslError;
 import android.os.Bundle;
-import android.util.Log;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.ViewGroup.LayoutParams;
 import android.view.Window;
+import android.webkit.SslErrorHandler;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-
 import com.facebook.android.Facebook.DialogListener;
 
 public class FbDialog extends Dialog {
@@ -44,8 +45,8 @@ public class FbDialog extends Dialog {
     static final float[] DIMENSIONS_DIFF_LANDSCAPE = {20, 60};
     static final float[] DIMENSIONS_DIFF_PORTRAIT = {40, 60};
     static final FrameLayout.LayoutParams FILL =
-        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.FILL_PARENT,
-                         ViewGroup.LayoutParams.FILL_PARENT);
+        new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT,
+                         LayoutParams.MATCH_PARENT);
     static final int MARGIN = 4;
     static final int PADDING = 2;
     static final String DISPLAY_STRING = "touch";
@@ -61,15 +62,41 @@ public class FbDialog extends Dialog {
     public FbDialog(Context context, String url, DialogListener listener) {
         super(context, android.R.style.Theme_Translucent_NoTitleBar);
         mUrl = url;
-        mListener = listener;
+        mListener = new SingleDispatchDialogListener(listener);
+    }
+
+    @Override
+    public void dismiss() {
+        if (mWebView != null) {
+            mWebView.stopLoading();
+        }
+        if (mSpinner.isShowing()) {
+            mSpinner.dismiss();
+        }
+        super.dismiss();
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        setOnCancelListener(new OnCancelListener() {
+            @Override
+            public void onCancel(DialogInterface dialogInterface) {
+                mListener.onCancel();
+            }
+        });
+
         mSpinner = new ProgressDialog(getContext());
         mSpinner.requestWindowFeature(Window.FEATURE_NO_TITLE);
         mSpinner.setMessage("Loading...");
+        mSpinner.setOnCancelListener(new OnCancelListener() {
+            @Override
+            public void onCancel(DialogInterface dialogInterface) {
+                mListener.onCancel();
+                FbDialog.this.dismiss();
+            }
+        });
         
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         mContent = new FrameLayout(getContext());
@@ -90,7 +117,7 @@ public class FbDialog extends Dialog {
          * add mContent to the Dialog view
          */
         mContent.addView(mCrossImage, new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT));
-        addContentView(mContent, new LayoutParams(LayoutParams.FILL_PARENT, LayoutParams.FILL_PARENT));
+        addContentView(mContent, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
     }
     
     private void createCrossImage() {
@@ -103,7 +130,7 @@ public class FbDialog extends Dialog {
                 FbDialog.this.dismiss();
             }
         });
-        Drawable crossDrawable = getContext().getResources().getDrawable(R.drawable.close);
+        Drawable crossDrawable = getContext().getResources().getDrawable(R.drawable.com_facebook_close);
         mCrossImage.setImageDrawable(crossDrawable);
         /* 'x' should not be visible while webview is loading
          * make it visible only after webview has fully loaded
@@ -111,6 +138,7 @@ public class FbDialog extends Dialog {
         mCrossImage.setVisibility(View.INVISIBLE);
     }
 
+    @SuppressLint("SetJavaScriptEnabled") 
     private void setUpWebView(int margin) {
         LinearLayout webViewContainer = new LinearLayout(getContext());
         mWebView = new WebView(getContext());
@@ -175,6 +203,15 @@ public class FbDialog extends Dialog {
         }
 
         @Override
+        public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+            super.onReceivedSslError(view, handler, error);
+
+            mListener.onError(new DialogError(null, ERROR_FAILED_SSL_HANDSHAKE, null));
+            handler.cancel();
+            FbDialog.this.dismiss();
+        }
+
+        @Override
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
             Util.logd("Facebook-WebView", "Webview loading URL: " + url);
             super.onPageStarted(view, url, favicon);
@@ -192,6 +229,58 @@ public class FbDialog extends Dialog {
             mContent.setBackgroundColor(Color.TRANSPARENT);
             mWebView.setVisibility(View.VISIBLE);
             mCrossImage.setVisibility(View.VISIBLE);
+        }
+    }
+
+    /**
+     * Ensure that only one listener method is called per dialog. This class is not thread
+     * safe and assumes that all onXXX calls will be made in the same thread (preferably the
+     * main thread). It is package private for testing purposes.
+     */
+    static class SingleDispatchDialogListener implements DialogListener {
+
+        private final DialogListener wrapped;
+        private boolean allowDispatch;
+
+        public SingleDispatchDialogListener(DialogListener listener) {
+            wrapped = listener;
+            allowDispatch = true;
+        }
+
+        @Override
+        public void onComplete(Bundle values) {
+            if (checkAndSetDispatch(false)) {
+                wrapped.onComplete(values);
+            }
+        }
+
+        @Override
+        public void onFacebookError(FacebookError e) {
+            if (checkAndSetDispatch(false)) {
+                wrapped.onFacebookError(e);
+            }
+        }
+
+        @Override
+        public void onError(DialogError e) {
+            if (checkAndSetDispatch(false)) {
+                wrapped.onError(e);
+            }
+        }
+
+        @Override
+        public void onCancel() {
+            if (checkAndSetDispatch(false)) {
+                wrapped.onCancel();
+            }
+        }
+
+        private boolean checkAndSetDispatch(boolean finalValue) {
+            if (wrapped != null && allowDispatch) {
+                allowDispatch = finalValue;
+                return true;
+            }
+            return false;
         }
     }
 }

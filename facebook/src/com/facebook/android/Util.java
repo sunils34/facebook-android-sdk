@@ -16,28 +16,15 @@
 
 package com.facebook.android;
 
-import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLDecoder;
-import java.net.URLEncoder;
-
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import android.app.AlertDialog.Builder;
 import android.content.Context;
 import android.os.Bundle;
 import android.util.Log;
-import android.webkit.CookieManager;
-import android.webkit.CookieSyncManager;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.*;
+import java.net.*;
 
 /**
  * Utility class supporting the Facebook Object.
@@ -52,6 +39,8 @@ public final class Util {
      * before releasing.  Sending sensitive data to log is a security risk.
      */
     private static boolean ENABLE_LOG = false;
+
+    private final static String UTF8 = "UTF-8";
 
     /**
      * Generate the multi-part post body providing the parameters and boundary
@@ -105,9 +94,16 @@ public final class Util {
             String array[] = s.split("&");
             for (String parameter : array) {
                 String v[] = parameter.split("=");
-                if (v.length == 2) {
-                    params.putString(URLDecoder.decode(v[0]),
-                                     URLDecoder.decode(v[1]));
+
+                try {
+                    if (v.length == 2) {
+                        params.putString(URLDecoder.decode(v[0], UTF8),
+                                         URLDecoder.decode(v[1], UTF8));
+                    } else if (v.length == 1) {
+                        params.putString(URLDecoder.decode(v[0], UTF8), "");
+                    }
+                } catch (UnsupportedEncodingException e) {
+                    // shouldn't happen
                 }
             }
         }
@@ -228,19 +224,6 @@ public final class Util {
         }
         in.close();
         return sb.toString();
-    }
-
-    public static void clearCookies(Context context) {
-        // Edge case: an illegal state exception is thrown if an instance of
-        // CookieSyncManager has not be created.  CookieSyncManager is normally
-        // created by a WebKit view, but this might happen if you start the
-        // app, restore saved state, and click logout before running a UI
-        // dialog in a WebView -- in which case the app crashes
-        @SuppressWarnings("unused")
-        CookieSyncManager cookieSyncMngr =
-            CookieSyncManager.createInstance(context);
-        CookieManager cookieManager = CookieManager.getInstance();
-        cookieManager.removeAllCookie();
     }
 
     /**
