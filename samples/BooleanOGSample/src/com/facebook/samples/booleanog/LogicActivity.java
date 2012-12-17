@@ -1,25 +1,44 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook.samples.booleanog;
 
 import android.app.AlertDialog;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.database.MatrixCursor;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Parcel;
+import android.os.Parcelable;
+import android.support.v4.app.FragmentActivity;
 import android.support.v4.app.FragmentManager;
 import android.support.v4.app.FragmentTransaction;
-import android.support.v4.content.LocalBroadcastManager;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
 import com.facebook.*;
+import com.facebook.model.*;
+import com.facebook.widget.FriendPickerFragment;
+import com.facebook.widget.UserSettingsFragment;
+import com.facebook.widget.PickerFragment;
 
 import java.text.SimpleDateFormat;
 import java.util.*;
 
-public class LogicActivity extends FacebookActivity {
+public class LogicActivity extends FragmentActivity {
 
     private static final String TAG = "BooleanOpenGraphSample";
 
@@ -30,6 +49,7 @@ public class LogicActivity extends FacebookActivity {
     private static final String SAVE_RESULT_TEXT = TAG + ".SAVE_RESULT_TEXT";
     private static final String SAVE_POST_RESULT_TEXT = TAG + ".SAVE_POST_RESULT_TEXT";
     private static final String SAVE_PENDING = TAG + ".SAVE_PENDING";
+    private static final String SAVE_FRIEND_ACTIONS = TAG + ".SAVE_FRIEND_ACTIONS";
     private static final String PENDING_POST_PATH = "PENDING_POST_PATH";
     private static final String PENDING_POST_LEFT = "PENDING_POST_LEFT";
     private static final String PENDING_POST_RIGHT = "PENDING_POST_RIGHT";
@@ -72,22 +92,37 @@ public class LogicActivity extends FacebookActivity {
     private RequestAsyncTask pendingRequest;
     private SimpleCursorAdapter friendActivityAdapter;
     private ProgressBar friendActivityProgressBar;
+    private ArrayList<ActionRow> friendActionList;
 
     // Login group
     private ViewGroup settingsGroup;
-    private LoginFragment loginFragment;
+    private UserSettingsFragment userSettingsFragment;
 
     // Content group
     private ViewGroup contentGroup;
     private ImageView contentImage;
     private Spinner contentSpinner;
 
-    /**
-     * Called when the activity is first created.
-     */
+    private UiLifecycleHelper uiHelper;
+    private Session.StatusCallback callback = new Session.StatusCallback() {
+        @Override
+        public void call(Session session, SessionState state, Exception exception) {
+            if (exception != null) {
+                pendingPost = null;
+            } else if (state == SessionState.OPENED) {
+                friendPickerFragment.loadData(false);
+            } else if (state == SessionState.OPENED_TOKEN_UPDATED) {
+                sendPendingPost();
+            }
+        }
+    };
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        uiHelper = new UiLifecycleHelper(this, callback);
+        uiHelper.onCreate(savedInstanceState);
+
         setContentView(R.layout.main);
 
         // Views
@@ -131,10 +166,10 @@ public class LogicActivity extends FacebookActivity {
             transaction.add(R.id.friend_picker_fragment, friendPickerFragment);
         }
 
-        loginFragment = (LoginFragment) fragmentManager.findFragmentById(R.id.login_fragment);
-        if (loginFragment == null) {
-            loginFragment = new LoginFragment();
-            transaction.add(R.id.login_fragment, loginFragment);
+        userSettingsFragment = (UserSettingsFragment) fragmentManager.findFragmentById(R.id.login_fragment);
+        if (userSettingsFragment == null) {
+            userSettingsFragment = new UserSettingsFragment();
+            transaction.add(R.id.login_fragment, userSettingsFragment);
         }
 
         transaction.commit();
@@ -161,7 +196,7 @@ public class LogicActivity extends FacebookActivity {
         // Friends
         friendPickerFragment.setOnErrorListener(new PickerFragment.OnErrorListener() {
             @Override
-            public void onError(FacebookException error) {
+            public void onError(PickerFragment<?> fragment, FacebookException error) {
                 LogicActivity.this.onError(error);
             }
         });
@@ -169,7 +204,7 @@ public class LogicActivity extends FacebookActivity {
         friendPickerFragment.setMultiSelect(false);
         friendPickerFragment.setOnSelectionChangedListener(new PickerFragment.OnSelectionChangedListener() {
             @Override
-            public void onSelectionChanged() {
+            public void onSelectionChanged(PickerFragment<?> fragment) {
                 LogicActivity.this.onFriendSelectionChanged();
             }
         });
@@ -205,7 +240,12 @@ public class LogicActivity extends FacebookActivity {
             resultText.setText(savedInstanceState.getString(SAVE_RESULT_TEXT));
             postResultText.setText(savedInstanceState.getString(SAVE_POST_RESULT_TEXT));
             activeTab = savedInstanceState.getString(SAVE_ACTIVE_TAB);
-            pendingPost = (Bundle) savedInstanceState.getBundle(SAVE_PENDING);
+            pendingPost = savedInstanceState.getBundle(SAVE_PENDING);
+
+            friendActionList = savedInstanceState.getParcelableArrayList(SAVE_FRIEND_ACTIONS);
+            if ((friendActionList != null) && (friendActionList.size() > 0)) {
+                updateCursor(friendActionList);
+            }
 
             if (getString(R.string.navigate_friends).equals(activeTab)) {
                 startButton = friendsButton;
@@ -216,45 +256,33 @@ public class LogicActivity extends FacebookActivity {
             }
         }
 
-        // Resolve deep-links, if any
-        Boolean deepLinkContent = getDeepLinkContent(getIntent().getData());
-        if (deepLinkContent != null) {
-            startButton = contentButton;
-            contentSpinner.setSelection(getSpinnerPosition(deepLinkContent));
+        if (!handleNativeLink()) {
+            onNavigateButtonClick(startButton);
         }
-
-        onNavigateButtonClick(startButton);
     }
 
     // -----------------------------------------------------------------------------------
     // Activity lifecycle
 
     @Override
-    protected void onStart() {
+    public void onStart() {
         super.onStart();
-        loadIfSessionValid();
-
-        BroadcastReceiver receiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                loadIfSessionValid();
-            }
-        };
-
-        IntentFilter openedFilter = new IntentFilter(Session.ACTION_ACTIVE_SESSION_OPENED);
-        LocalBroadcastManager.getInstance(this).registerReceiver(receiver, openedFilter);
-    }
-
-    private void loadIfSessionValid() {
         Session session = Session.getActiveSession();
-        if ((session != null) && session.isOpened()) {
+        if (session != null && session.isOpened()) {
             friendPickerFragment.loadData(false);
         }
     }
 
     @Override
+    public void onResume() {
+        super.onResume();
+        uiHelper.onResume();
+    }
+
+    @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
+        uiHelper.onSaveInstanceState(outState);
 
         outState.putInt(SAVE_LEFT_OPERAND_SELECTION, leftSpinner.getSelectedItemPosition());
         outState.putInt(SAVE_RIGHT_OPERAND_SELECTION, rightSpinner.getSelectedItemPosition());
@@ -263,11 +291,19 @@ public class LogicActivity extends FacebookActivity {
         outState.putString(SAVE_POST_RESULT_TEXT, postResultText.getText().toString());
         outState.putString(SAVE_ACTIVE_TAB, activeTab);
         outState.putBundle(SAVE_PENDING, pendingPost);
+        outState.putParcelableArrayList(SAVE_FRIEND_ACTIONS, friendActionList);
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        uiHelper.onPause();
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
+        uiHelper.onDestroy();
 
         friendPickerFragment.setOnErrorListener(null);
         friendPickerFragment.setOnSelectionChangedListener(null);
@@ -275,17 +311,8 @@ public class LogicActivity extends FacebookActivity {
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        loginFragment.onActivityResult(requestCode, resultCode, data);
         super.onActivityResult(requestCode, resultCode, data);
-    }
-
-    @Override
-    protected void onSessionStateChange(SessionState state, Exception exception) {
-        if (exception != null) {
-            pendingPost = null;
-        } else if (state == SessionState.OPENED_TOKEN_UPDATED) {
-            sendPendingPost();
-        }
+        uiHelper.onActivityResult(requestCode, resultCode, data);
     }
 
     // -----------------------------------------------------------------------------------
@@ -307,6 +334,18 @@ public class LogicActivity extends FacebookActivity {
         friendsGroup.setVisibility(getGroupVisibility(source, friendsButton));
         settingsGroup.setVisibility(getGroupVisibility(source, settingsButton));
         contentGroup.setVisibility(getGroupVisibility(source, contentButton));
+
+        // Show an error if viewing friends and there is no logged in user.
+        if (source == friendsButton) {
+            Session session = Session.getActiveSession();
+            if ((session == null) || !session.isOpened()) {
+                new AlertDialog.Builder(this)
+                        .setTitle(R.string.feature_requires_login_title)
+                        .setMessage(R.string.feature_requires_login_message)
+                        .setPositiveButton(R.string.ok_button, null)
+                        .show();
+            }
+        }
     }
 
     private int getGroupVisibility(Button source, Button groupButton) {
@@ -393,8 +432,8 @@ public class LogicActivity extends FacebookActivity {
 
         List<String> permissions = session.getPermissions();
         if (!permissions.containsAll(PERMISSIONS)) {
-            Session.ReauthorizeRequest reauthRequest = new Session.ReauthorizeRequest(this, PERMISSIONS);
-            session.reauthorizeForPublish(reauthRequest);
+            Session.NewPermissionsRequest newPermissionsRequest = new Session.NewPermissionsRequest(this, PERMISSIONS);
+            session.requestNewPublishPermissions(newPermissionsRequest);
             return;
         }
 
@@ -406,7 +445,7 @@ public class LogicActivity extends FacebookActivity {
         boolean rightOperand = pendingPost.getBoolean(PENDING_POST_RIGHT);
         boolean result = pendingPost.getBoolean(PENDING_POST_RESULT);
 
-        LogicAction action = GraphObjectWrapper.createGraphObject(LogicAction.class);
+        LogicAction action = GraphObject.Factory.create(LogicAction.class);
         action.setResult(result);
         action.setTruthvalue(getTruthValueObject(leftOperand));
         action.setAnothertruthvalue(getTruthValueObject(rightOperand));
@@ -427,30 +466,10 @@ public class LogicActivity extends FacebookActivity {
 
     private void onPostActionResponse(Response response) {
         PostResponse postResponse = response.getGraphObjectAs(PostResponse.class);
-
-        String id = null;
-        PostResponse.Body body = null;
-        if (postResponse != null) {
-            id = postResponse.getId();
-            body = postResponse.getBody();
-        }
-
-        PostResponse.Error error = null;
-        if (body != null) {
-            error = body.getError();
-        }
-
-        String errorMessage = null;
-        if (error != null) {
-            errorMessage = error.getMessage();
-        }
-
-        if (errorMessage != null) {
-            postResultText.setText(errorMessage);
+        if (postResponse != null && postResponse.getId() != null) {
+            postResultText.setText("Post id = " + postResponse.getId());
         } else if (response.getError() != null) {
-            postResultText.setText(response.getError().getLocalizedMessage());
-        } else if (id != null) {
-            postResultText.setText("Post id = " + id);
+            postResultText.setText(response.getError().getErrorMessage());
         } else {
             postResultText.setText("");
         }
@@ -459,14 +478,16 @@ public class LogicActivity extends FacebookActivity {
     private TruthValueGraphObject getTruthValueObject(boolean value) {
         if (value) {
             if (TRUE_GRAPH_OBJECT == null) {
-                TruthValueGraphObject object = GraphObjectWrapper.createGraphObject(TruthValueGraphObject.class);
+                TruthValueGraphObject object = GraphObject.Factory
+                        .create(TruthValueGraphObject.class);
                 object.setUrl(TRUE_GRAPH_OBJECT_URL);
                 TRUE_GRAPH_OBJECT = object;
             }
             return TRUE_GRAPH_OBJECT;
         } else {
             if (FALSE_GRAPH_OBJECT == null) {
-                TruthValueGraphObject object = GraphObjectWrapper.createGraphObject(TruthValueGraphObject.class);
+                TruthValueGraphObject object = GraphObject.Factory
+                        .create(TruthValueGraphObject.class);
                 object.setUrl(FALSE_GRAPH_OBJECT_URL);
                 FALSE_GRAPH_OBJECT = object;
             }
@@ -517,8 +538,8 @@ public class LogicActivity extends FacebookActivity {
     private void onPostExecute(List<Response> result) {
         friendActivityProgressBar.setVisibility(View.GONE);
 
-        ArrayList<ActionRow> publishedItems = createActionRows(result);
-        updateCursor(publishedItems);
+        friendActionList = createActionRows(result);
+        updateCursor(friendActionList);
     }
 
     private ArrayList<ActionRow> createActionRows(List<Response> result) {
@@ -627,6 +648,32 @@ public class LogicActivity extends FacebookActivity {
     // -----------------------------------------------------------------------------------
     // Utility methods
 
+    private boolean handleNativeLink() {
+        Session existingSession = Session.getActiveSession();
+        // If we have a valid existing session, we'll use it; if not, open one using the provided Intent
+        // but do not cache the token (we don't want to use the same user identity the next time the
+        // app is run).
+        if (existingSession == null || !existingSession.isOpened()) {
+            AccessToken accessToken = AccessToken.createFromNativeLinkingIntent(getIntent());
+            if (accessToken != null) {
+                Session newSession = new Session.Builder(this).setTokenCachingStrategy(new NonCachingTokenCachingStrategy())
+                        .build();
+                newSession.open(accessToken, null);
+
+                Session.setActiveSession(newSession);
+            }
+        }
+        // See if we have a deep link in addition.
+        Boolean deepLinkContent = getDeepLinkContent(getIntent().getData());
+        if (deepLinkContent != null) {
+            onNavigateButtonClick(contentButton);
+            contentSpinner.setSelection(getSpinnerPosition(deepLinkContent));
+            return true;
+        }
+
+        return false;
+    }
+
     private int getSpinnerPosition(Boolean value) {
         initializeSpinnerIndexes();
 
@@ -662,9 +709,15 @@ public class LogicActivity extends FacebookActivity {
     }
 
     private void onError(Exception error) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Error").setMessage(error.getMessage()).setPositiveButton("OK", null);
-        builder.show();
+        showErrorMessage(error.getMessage());
+    }
+
+    private void showErrorMessage(String message) {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.error_dialog_title)
+                .setMessage(message)
+                .setPositiveButton(R.string.ok_button, null)
+                .show();
     }
 
     private <T> T chooseOne(List<T> ts) {
@@ -682,7 +735,7 @@ public class LogicActivity extends FacebookActivity {
         Boolean getInstalled();
     }
 
-    private class ActionRow implements Comparable<ActionRow> {
+    private static class ActionRow implements Comparable<ActionRow>, Parcelable {
         final String actionText;
         final Date publishDate;
 
@@ -699,6 +752,32 @@ public class LogicActivity extends FacebookActivity {
                 return publishDate.compareTo(other.publishDate);
             }
         }
+
+        @Override
+        public int describeContents() {
+            return 0;
+        }
+
+        @Override
+        public void writeToParcel(Parcel parcel, int flags) {
+            parcel.writeString(actionText);
+            parcel.writeLong(publishDate.getTime());
+        }
+
+        @SuppressWarnings("unused")
+        public final Creator<ActionRow> CREATOR = new Creator<ActionRow>() {
+            @Override
+            public ActionRow createFromParcel(Parcel parcel) {
+                String actionText = parcel.readString();
+                Date publishDate = new Date(parcel.readLong());
+                return new ActionRow(actionText, publishDate);
+            }
+
+            @Override
+            public ActionRow[] newArray(int size) {
+                return new ActionRow[size];
+            }
+        };
     }
 
     /**
@@ -740,16 +819,6 @@ public class LogicActivity extends FacebookActivity {
      * Used to inspect the response from posting an action
      */
     private interface PostResponse extends GraphObject {
-        Body getBody();
-
         String getId();
-
-        interface Body extends GraphObject {
-            Error getError();
-        }
-
-        interface Error extends GraphObject {
-            String getMessage();
-        }
     }
 }

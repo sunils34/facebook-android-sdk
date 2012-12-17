@@ -1,127 +1,142 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook;
 
-import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.app.Dialog;
-import android.content.DialogInterface;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.net.Uri;
 import android.os.Bundle;
-import android.webkit.CookieSyncManager;
-import com.facebook.android.*;
+import android.view.View;
+import com.facebook.android.R;
 
 /**
- * This class addresses the issue of a potential window leak during
- * dialog authorization if the Activity containing the dialog is destroyed
- * (e.g. if the user rotates the device).
- * <p/>
- * Add this activity to your AndroidManifest.xml to ensure proper handling
- * of dialog authorization.
+ * This Activity is a necessary part of the overall Facebook login process
+ * but is not meant to be used directly. Add this activity to your
+ * AndroidManifest.xml to ensure proper handling of Facebook login.
+ * <pre>
+ * {@code
+ * <activity android:name="com.facebook.LoginActivity"
+ *           android:theme="@android:style/Theme.Translucent.NoTitleBar"
+ *           android:label="@string/app_name" />
+ * }
+ * </pre>
+ * Do not start this activity directly.
  */
 public class LoginActivity extends Activity {
-    private Dialog loginDialog;
-    private Dialog errorDialog;
+    static final String RESULT_KEY = "com.facebook.LoginActivity:Result";
+
+    private static final String NULL_CALLING_PKG_ERROR_MSG =
+            "Cannot call LoginActivity with a null calling package. " +
+                    "This can occur if the launchMode of the caller is singleInstance.";
+    private static final String SAVED_CALLING_PKG_KEY = "callingPackage";
+    private static final String SAVED_AUTH_CLIENT = "authorizationClient";
+    private static final String EXTRA_REQUEST = "request";
+
+    private String callingPackage;
+    private AuthorizationClient authorizationClient;
+    private AuthorizationClient.AuthorizationRequest request;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.com_facebook_login_activity_layout);
+
+        if (savedInstanceState != null) {
+            callingPackage = savedInstanceState.getString(SAVED_CALLING_PKG_KEY);
+            authorizationClient = (AuthorizationClient) savedInstanceState.getSerializable(SAVED_AUTH_CLIENT);
+        } else {
+            callingPackage = getCallingPackage();
+            authorizationClient = new AuthorizationClient();
+            request = (AuthorizationClient.AuthorizationRequest) getIntent().getSerializableExtra(EXTRA_REQUEST);
+        }
+
+        authorizationClient.setContext(this);
+        authorizationClient.setOnCompletedListener(new AuthorizationClient.OnCompletedListener() {
+            @Override
+            public void onCompleted(AuthorizationClient.Result outcome) {
+                onAuthClientCompleted(outcome);
+            }
+        });
+        authorizationClient.setBackgroundProcessingListener(new AuthorizationClient.BackgroundProcessingListener() {
+            @Override
+            public void onBackgroundProcessingStarted() {
+                findViewById(R.id.com_facebook_login_activity_progress_bar).setVisibility(View.VISIBLE);
+            }
+
+            @Override
+            public void onBackgroundProcessingStopped() {
+                findViewById(R.id.com_facebook_login_activity_progress_bar).setVisibility(View.GONE);
+            }
+        });
+    }
+
+    private void onAuthClientCompleted(AuthorizationClient.Result outcome) {
+        request = null;
+
+        int resultCode = (outcome.code == AuthorizationClient.Result.Code.CANCEL) ?
+                RESULT_CANCELED : RESULT_OK;
+
+        Bundle bundle = new Bundle();
+        bundle.putSerializable(RESULT_KEY, outcome);
+
+        Intent resultIntent = new Intent();
+        resultIntent.putExtras(bundle);
+        setResult(resultCode, resultIntent);
+
+        finish();
+    }
 
     @Override
     public void onResume() {
         super.onResume();
-        int permissionCheck = checkCallingOrSelfPermission(Manifest.permission.INTERNET);
-        if (permissionCheck != PackageManager.PERMISSION_GRANTED) {
-            AlertDialog.Builder builder = new AlertDialog.Builder(this);
-            builder.setTitle("AndroidManifest Error")
-                   .setMessage("WebView login requires INTERNET permission")
-                   .setCancelable(true)
-                   .setPositiveButton(R.string.com_facebook_dialogloginactivity_ok_button,
-                           new DialogInterface.OnClickListener() {
-                               @Override
-                               public void onClick(DialogInterface dialogInterface, int i) {
-                                   finish();
-                               }
-                           })
-                   .setOnCancelListener(new DialogInterface.OnCancelListener() {
-                       @Override
-                       public void onCancel(DialogInterface dialogInterface) {
-                           finish();
-                       }
-                   });
-            errorDialog = builder.create();
-            errorDialog.show();
-            setResult(Activity.RESULT_CANCELED);
-            return;
+
+        // If the calling package is null, this generally means that the callee was started
+        // with a launchMode of singleInstance. Unfortunately, Android does not allow a result
+        // to be set when the callee is a singleInstance, so we throw an exception here.
+        if (callingPackage == null) {
+            throw new FacebookException(NULL_CALLING_PKG_ERROR_MSG);
         }
 
-        Bundle parameters = new Bundle();
-        String permissions = getIntent().getStringExtra("scope");
-        if (!Utility.isNullOrEmpty(permissions)) {
-            parameters.putString(ServerProtocol.DIALOG_PARAM_SCOPE, permissions);
-        }
-
-        // The call to clear cookies will create the first instance of CookieSyncManager if necessary
-        Utility.clearFacebookCookies(this);
-
-        Facebook.DialogListener listener = new Facebook.DialogListener() {
-            public void onComplete(Bundle bundle) {
-                // Ensure any cookies set by the dialog are saved
-                CookieSyncManager.getInstance().sync();
-                setResultAndFinish(Activity.RESULT_OK, bundle);
-            }
-
-            public void onError(DialogError error) {
-                Bundle bundle = null;
-                if (error != null) {
-                    bundle = new Bundle();
-                    bundle.putInt(Session.WEB_VIEW_ERROR_CODE_KEY, error.getErrorCode());
-                    bundle.putString(Session.WEB_VIEW_FAILING_URL_KEY, error.getFailingUrl());
-                    bundle.putString("error", error.getMessage());
-                }
-                setResultAndFinish(Activity.RESULT_OK, bundle);
-            }
-
-            public void onFacebookError(FacebookError error) {
-                Bundle bundle = null;
-                if (error != null && error.getMessage() != null) {
-                    bundle = new Bundle();
-                    bundle.putString("error", error.getMessage());
-                }
-                setResultAndFinish(Activity.RESULT_OK, bundle);
-            }
-
-            public void onCancel() {
-                setResultAndFinish(Activity.RESULT_CANCELED, null);
-            }
-
-            private void setResultAndFinish(int resultCode, Bundle bundle) {
-                if (bundle != null) {
-                    Intent intent = new Intent();
-                    intent.putExtras(bundle);
-                    setResult(resultCode, intent);
-                } else {
-                    setResult(resultCode);
-                }
-                finish();
-            }
-        };
-
-        parameters.putString(ServerProtocol.DIALOG_PARAM_DISPLAY, "touch");
-        parameters.putString(ServerProtocol.DIALOG_PARAM_REDIRECT_URI, "fbconnect://success");
-        parameters.putString(ServerProtocol.DIALOG_PARAM_TYPE, "user_agent");
-        parameters.putString(ServerProtocol.DIALOG_PARAM_CLIENT_ID, getIntent().getStringExtra("client_id"));
-
-        Uri uri = Utility.buildUri(ServerProtocol.DIALOG_AUTHORITY, ServerProtocol.DIALOG_OAUTH_PATH, parameters);
-        loginDialog = new FbDialog(this, uri.toString(), listener);
-        loginDialog.show();
+        authorizationClient.startOrContinueAuth(request);
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        if (errorDialog != null && errorDialog.isShowing()) {
-            errorDialog.dismiss();
-        }
-        if (loginDialog != null && loginDialog.isShowing()) {
-            loginDialog.dismiss();
-        }
+
+        authorizationClient.cancelCurrentHandler();
+        findViewById(R.id.com_facebook_login_activity_progress_bar).setVisibility(View.GONE);
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+
+        outState.putString(SAVED_CALLING_PKG_KEY, callingPackage);
+        outState.putSerializable(SAVED_AUTH_CLIENT, authorizationClient);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        authorizationClient.onActivityResult(requestCode, resultCode, data);
+    }
+
+    static Bundle populateIntentExtras(AuthorizationClient.AuthorizationRequest request) {
+        Bundle extras = new Bundle();
+        extras.putSerializable(EXTRA_REQUEST, request);
+        return extras;
     }
 }

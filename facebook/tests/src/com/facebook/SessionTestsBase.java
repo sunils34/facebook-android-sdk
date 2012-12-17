@@ -22,23 +22,28 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.ConditionVariable;
 import android.os.Looper;
+import com.facebook.internal.Utility;
+import com.facebook.model.GraphMultiResult;
+import com.facebook.model.GraphObject;
+import com.facebook.model.GraphObjectList;
+import com.facebook.model.GraphUser;
 
-import java.util.LinkedList;
+import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public class SessionTestsBase extends FacebookTestCase {
-    static final int DEFAULT_TIMEOUT_MILLISECONDS = 10 * 1000;
+    public static final int DEFAULT_TIMEOUT_MILLISECONDS = 10 * 1000;
     static final int SIMULATED_WORKING_MILLISECONDS = 20;
-    static final int STRAY_CALLBACK_WAIT_MILLISECONDS = 50;
-    
-    ScriptedSession createScriptedSessionOnBlockerThread(TokenCache cache) {
-        return createScriptedSessionOnBlockerThread("SomeApplicationId", cache);
+    public static final int STRAY_CALLBACK_WAIT_MILLISECONDS = 50;
+
+    public ScriptedSession createScriptedSessionOnBlockerThread(TokenCachingStrategy cachingStrategy) {
+        return createScriptedSessionOnBlockerThread(Utility.getMetadataApplicationId(getActivity()), cachingStrategy);
     }
 
     ScriptedSession createScriptedSessionOnBlockerThread(final String applicationId,
-            final TokenCache cache) {
+            final TokenCachingStrategy cachingStrategy) {
         class MutableState {
             ScriptedSession session;
         }
@@ -48,14 +53,14 @@ public class SessionTestsBase extends FacebookTestCase {
         runOnBlockerThread(new Runnable() {
             @Override
             public void run() {
-                mutable.session = new ScriptedSession(getActivity(), applicationId, cache);
+                mutable.session = new ScriptedSession(getActivity(), applicationId, cachingStrategy);
             }
         }, true);
 
         return mutable.session;
     }
 
-    static void stall(int stallMsec) {
+    public static void stall(int stallMsec) {
         try {
             Thread.sleep(stallMsec);
         } catch (InterruptedException e) {
@@ -63,64 +68,107 @@ public class SessionTestsBase extends FacebookTestCase {
         }
     }
 
-    static class ScriptedSession extends Session {
+    public class ScriptedSession extends Session {
         private static final long serialVersionUID = 1L;
         private final LinkedList<AuthorizeResult> pendingAuthorizations = new LinkedList<AuthorizeResult>();
+        private AuthorizationRequest lastRequest;
+        private AuthorizeResult currentAuthorization = null;
 
-        ScriptedSession(Context currentContext, String applicationId, TokenCache tokenCache) {
-            super(currentContext, applicationId, tokenCache, false);
+        public ScriptedSession(Context currentContext, String applicationId, TokenCachingStrategy tokenCachingStrategy) {
+            super(currentContext, applicationId, tokenCachingStrategy);
+        }
+
+        public void addAuthorizeResult(String token, List<String> permissions, AccessTokenSource source) {
+            addAuthorizeResult(AccessToken.createFromString(token, permissions, source));
         }
 
         public void addAuthorizeResult(AccessToken token) {
             pendingAuthorizations.add(new AuthorizeResult(token));
         }
 
+        public void addAuthorizeResult(AccessToken token, List<String> permissions) {
+            pendingAuthorizations.add(new AuthorizeResult(token, permissions));
+        }
+
+        public void addAuthorizeResult(AccessToken token, String... permissions) {
+            pendingAuthorizations.add(new AuthorizeResult(token, Arrays.asList(permissions)));
+        }
+
         public void addAuthorizeResult(Exception exception) {
             pendingAuthorizations.add(new AuthorizeResult(exception));
+        }
+
+        public void addPendingAuthorizeResult() {
+            pendingAuthorizations.add(new AuthorizeResult());
+        }
+
+        public AuthorizationRequest getLastRequest() {
+            return lastRequest;
+        }
+
+        public SessionDefaultAudience getLastRequestAudience() {
+            return lastRequest.getDefaultAudience();
         }
 
         // Overrides authorize to return the next AuthorizeResult we added.
         @Override
         void authorize(final AuthorizationRequest request) {
-            Settings.getExecutor().execute(new Runnable() {
+            lastRequest = request;
+            getActivity().runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
                     stall(SIMULATED_WORKING_MILLISECONDS);
-                    AuthorizeResult result = pendingAuthorizations.poll();
+                    currentAuthorization = pendingAuthorizations.poll();
 
-                    if (result == null) {
+                    if (currentAuthorization == null) {
                         fail("Missing call to addScriptedAuthorization");
                     }
-
-                    finishAuth(result.token, result.exception);
+                    if (!currentAuthorization.leaveAsPending) {
+                        finishAuthOrReauth(currentAuthorization.token, currentAuthorization.exception);
+                    }
                 }
             });
         }
 
-        private static class AuthorizeResult {
+        private class AuthorizeResult {
             final AccessToken token;
             final Exception exception;
+            final List<String> resultingPermissions;
+            final boolean leaveAsPending;
 
-            private AuthorizeResult(AccessToken token, Exception exception) {
+            private AuthorizeResult(AccessToken token, Exception exception, List<String> permissions) {
                 this.token = token;
                 this.exception = exception;
+                this.resultingPermissions = permissions;
+                this.leaveAsPending = false;
+            }
+
+            private AuthorizeResult() {
+                this.token = null;
+                this.exception = null;
+                this.resultingPermissions = null;
+                this.leaveAsPending = true;
+            }
+
+            AuthorizeResult(AccessToken token, List<String> permissions) {
+                this(token, null, permissions);
             }
 
             AuthorizeResult(AccessToken token) {
-                this(token, null);
+                this(token, null, null);
             }
 
             AuthorizeResult(Exception exception) {
-                this(null, exception);
+                this(null, exception, null);
             }
         }
     }
 
-    static class SessionStatusCallbackRecorder implements Session.StatusCallback {
+    public static class SessionStatusCallbackRecorder implements Session.StatusCallback {
         private final BlockingQueue<Call> calls = new LinkedBlockingQueue<Call>();
         volatile boolean isClosed = false;
 
-        void waitForCall(Session session, SessionState state, Exception exception) {
+        public void waitForCall(Session session, SessionState state, Exception exception) {
             Call call = null;
 
             try {
@@ -134,10 +182,15 @@ public class SessionTestsBase extends FacebookTestCase {
 
             assertEquals(session, call.session);
             assertEquals(state, call.state);
-            assertEquals(exception, call.exception);
+            if (exception != null && call.exception != null) {
+                assertEquals(exception.getClass(), call.exception.getClass());
+            } else {
+                // They should both be null if either of them is.
+                assertTrue(exception == call.exception);
+            }
         }
 
-        void close() {
+        public void close() {
             isClosed = true;
             assertEquals(0, calls.size());
         }
@@ -151,7 +204,7 @@ public class SessionTestsBase extends FacebookTestCase {
             if (isClosed) {
                 fail("Reauthorize callback called after closed");
             }
-            assertEquals("Callback should run on main UI thread", Thread.currentThread(), 
+            assertEquals("Callback should run on main UI thread", Thread.currentThread(),
                     Looper.getMainLooper().getThread());
         }
 
@@ -169,22 +222,22 @@ public class SessionTestsBase extends FacebookTestCase {
 
     }
 
-    static class MockTokenCache extends TokenCache {
+    public static class MockTokenCachingStrategy extends TokenCachingStrategy {
         private final String token;
         private final long expires_in;
         private Bundle saved;
 
-        MockTokenCache() {
+        MockTokenCachingStrategy() {
             this("FakeToken", DEFAULT_TIMEOUT_MILLISECONDS);
         }
 
-        MockTokenCache(String token, long expires_in) {
+        public MockTokenCachingStrategy(String token, long expires_in) {
             this.token = token;
             this.expires_in = expires_in;
             this.saved = null;
         }
 
-        Bundle getSavedState() {
+        public Bundle getSavedState() {
             return saved;
         }
 
@@ -195,8 +248,8 @@ public class SessionTestsBase extends FacebookTestCase {
             if (token != null) {
                 bundle = new Bundle();
 
-                TokenCache.putToken(bundle, token);
-                TokenCache.putExpirationMilliseconds(bundle, System.currentTimeMillis() + expires_in);
+                TokenCachingStrategy.putToken(bundle, token);
+                TokenCachingStrategy.putExpirationMilliseconds(bundle, System.currentTimeMillis() + expires_in);
             }
 
             return bundle;

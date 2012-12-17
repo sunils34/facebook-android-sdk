@@ -13,12 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.facebook;
 
 import android.graphics.Bitmap;
 import android.test.suitebuilder.annotation.LargeTest;
 import android.test.suitebuilder.annotation.MediumTest;
 import android.test.suitebuilder.annotation.SmallTest;
+import com.facebook.model.GraphObject;
+import com.facebook.model.GraphPlace;
+import com.facebook.model.GraphUser;
 
 import java.net.HttpURLConnection;
 import java.util.Arrays;

@@ -1,11 +1,27 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook.samples.switchuser;
 
 import android.os.Bundle;
 import android.support.v4.app.Fragment;
 import android.view.*;
 import android.widget.TextView;
-import com.facebook.GraphUser;
-import com.facebook.ProfilePictureView;
+import com.facebook.model.GraphUser;
+import com.facebook.widget.ProfilePictureView;
 
 public class ProfileFragment extends Fragment {
 
@@ -72,10 +88,10 @@ public class ProfileFragment extends Fragment {
         }
 
         if (user == null) {
-            profilePictureView.setUserId(null);
-            userNameView.setText(getString(R.string.greeting_no_user));
+            profilePictureView.setProfileId(null);
+            userNameView.setText(R.string.greeting_no_user);
         } else {
-            profilePictureView.setUserId(user.getId());
+            profilePictureView.setProfileId(user.getId());
             userNameView.setText(
                     String.format(getString(R.string.greeting_format), user.getFirstName()));
         }

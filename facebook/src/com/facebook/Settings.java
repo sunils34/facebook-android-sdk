@@ -23,7 +23,10 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import com.facebook.android.Util;
+import com.facebook.android.BuildConfig;
+import com.facebook.internal.Utility;
+import com.facebook.model.GraphObject;
+import com.facebook.internal.Validate;
 import org.json.JSONException;
 
 import java.lang.reflect.Field;
@@ -37,9 +40,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Allows some customization of sdk behavior.
  */
 public final class Settings {
-    static final String LOG_TAG_BASE = "FacebookSDK.";
-    private static final HashSet<LoggingBehaviors> loggingBehaviors = new HashSet<LoggingBehaviors>();
+    private static final HashSet<LoggingBehavior> loggingBehaviors = new HashSet<LoggingBehavior>();
     private static volatile Executor executor;
+    private static volatile boolean shouldAutoPublishInstall;
+
     private static final int DEFAULT_CORE_POOL_SIZE = 5;
     private static final int DEFAULT_MAXIMUM_POOL_SIZE = 128;
     private static final int DEFAULT_KEEP_ALIVE = 1;
@@ -76,9 +80,9 @@ public final class Settings {
      *
      * @return a set containing enabled logging behaviors
      */
-    public static final Set<LoggingBehaviors> getLoggingBehaviors() {
+    public static final Set<LoggingBehavior> getLoggingBehaviors() {
         synchronized (loggingBehaviors) {
-            return Collections.unmodifiableSet(new HashSet<LoggingBehaviors>(loggingBehaviors));
+            return Collections.unmodifiableSet(new HashSet<LoggingBehavior>(loggingBehaviors));
         }
     }
 
@@ -91,7 +95,7 @@ public final class Settings {
      * @param behavior
      *          The LoggingBehavior to enable
      */
-    public static final void addLoggingBehavior(LoggingBehaviors behavior) {
+    public static final void addLoggingBehavior(LoggingBehavior behavior) {
         synchronized (loggingBehaviors) {
             loggingBehaviors.add(behavior);
         }
@@ -106,7 +110,7 @@ public final class Settings {
      * @param behavior
      *          The LoggingBehavior to disable
      */
-    public static final void removeLoggingBehavior(LoggingBehaviors behavior) {
+    public static final void removeLoggingBehavior(LoggingBehavior behavior) {
         synchronized (loggingBehaviors) {
             loggingBehaviors.remove(behavior);
         }
@@ -134,9 +138,9 @@ public final class Settings {
      *          The LoggingBehavior to check
      * @return whether behavior is enabled
      */
-    public static final boolean isLoggingBehaviorEnabled(LoggingBehaviors behavior) {
+    public static final boolean isLoggingBehaviorEnabled(LoggingBehavior behavior) {
         synchronized (loggingBehaviors) {
-            return loggingBehaviors.contains(behavior);
+            return BuildConfig.DEBUG && loggingBehaviors.contains(behavior);
         }
     }
 
@@ -217,9 +221,27 @@ public final class Settings {
     }
 
     /**
-     * Manually publish install attribution to the facebook graph.  Internally handles tracking repeat calls to prevent
+     * Sets whether opening a Session should automatically publish install attribution to the Facebook graph.
+     *
+     * @param shouldAutoPublishInstall true to automatically publish, false to not
+     */
+    public static void setShouldAutoPublishInstall(boolean shouldAutoPublishInstall) {
+        Settings.shouldAutoPublishInstall = shouldAutoPublishInstall;
+    }
+
+    /**
+     * Gets whether opening a Session should automatically publish install attribution to the Facebook graph.
+     *
+     * @return true to automatically publish, false to not
+     */
+    public static boolean getShouldAutoPublishInstall() {
+        return shouldAutoPublishInstall;
+    }
+
+    /**
+     * Manually publish install attribution to the Facebook graph.  Internally handles tracking repeat calls to prevent
      * multiple installs being published to the graph.
-     * @param context
+     * @param context the current Context
      * @return returns false on error.  Applications should retry until true is returned.  Safe to call again after
      * true is returned.
      */
@@ -247,7 +269,7 @@ public final class Settings {
                 }
 
                 if ((Boolean)doesSupportAttribution) {
-                    GraphObject publishParams = GraphObjectWrapper.createGraphObject();
+                    GraphObject publishParams = GraphObject.Factory.create();
                     publishParams.setProperty(ANALYTICS_EVENT, MOBILE_INSTALL_EVENT);
                     publishParams.setProperty(ATTRIBUTION_KEY, attributionId);
 
@@ -258,14 +280,15 @@ public final class Settings {
 
                     // denote success since no error threw from the post.
                     SharedPreferences.Editor editor = preferences.edit();
-                    editor.putLong(pingKey, System.currentTimeMillis());
+                    lastPing = System.currentTimeMillis();
+                    editor.putLong(pingKey, lastPing);
                     editor.commit();
                 }
             }
-            return true;
+            return lastPing != 0;
         } catch (Exception e) {
             // if there was an error, fall through to the failure case.
-            Util.logd("Facebook-publish", e.getMessage());
+            Utility.logd("Facebook-publish", e.getMessage());
         }
         return false;
     }

@@ -1,3 +1,19 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook.scrumptious;
 
 import android.app.AlertDialog;
@@ -15,9 +31,9 @@ import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentActivity;
 import android.support.v4.app.FragmentManager;
 import com.facebook.FacebookException;
-import com.facebook.FriendPickerFragment;
-import com.facebook.PickerFragment;
-import com.facebook.PlacePickerFragment;
+import com.facebook.widget.FriendPickerFragment;
+import com.facebook.widget.PickerFragment;
+import com.facebook.widget.PlacePickerFragment;
 
 /**
  * The PickerActivity enhances the Friend or Place Picker by adding a title
@@ -30,7 +46,7 @@ public class PickerActivity extends FragmentActivity {
 
     private static final int SEARCH_RADIUS_METERS = 1000;
     private static final int SEARCH_RESULT_LIMIT = 50;
-    private static final String SEARCH_TEXT = "restaurant";
+    private static final String SEARCH_TEXT = "Restaurant";
     private static final int LOCATION_CHANGE_THRESHOLD = 50; // meters
 
     private static final Location SAN_FRANCISCO_LOCATION = new Location("") {{
@@ -61,13 +77,13 @@ public class PickerActivity extends FragmentActivity {
 
             friendPickerFragment.setOnErrorListener(new PickerFragment.OnErrorListener() {
                 @Override
-                public void onError(FacebookException error) {
+                public void onError(PickerFragment<?> fragment, FacebookException error) {
                     PickerActivity.this.onError(error);
                 }
             });
             friendPickerFragment.setOnDoneButtonClickedListener(new PickerFragment.OnDoneButtonClickedListener() {
                 @Override
-                public void onDoneButtonClicked() {
+                public void onDoneButtonClicked(PickerFragment<?> fragment) {
                     finishActivity();
                 }
             });
@@ -81,19 +97,19 @@ public class PickerActivity extends FragmentActivity {
             }
             placePickerFragment.setOnSelectionChangedListener(new PickerFragment.OnSelectionChangedListener() {
                 @Override
-                public void onSelectionChanged() {
+                public void onSelectionChanged(PickerFragment<?> fragment) {
                     finishActivity(); // call finish since you can only pick one place
                 }
             });
             placePickerFragment.setOnErrorListener(new PickerFragment.OnErrorListener() {
                 @Override
-                public void onError(FacebookException error) {
+                public void onError(PickerFragment<?> fragment, FacebookException error) {
                     PickerActivity.this.onError(error);
                 }
             });
             placePickerFragment.setOnDoneButtonClickedListener(new PickerFragment.OnDoneButtonClickedListener() {
                 @Override
-                public void onDoneButtonClicked() {
+                public void onDoneButtonClicked(PickerFragment<?> fragment) {
                     finishActivity();
                 }
             });
@@ -161,7 +177,7 @@ public class PickerActivity extends FragmentActivity {
                     placePickerFragment.setRadiusInMeters(SEARCH_RADIUS_METERS);
                     placePickerFragment.setSearchText(SEARCH_TEXT);
                     placePickerFragment.setResultsLimit(SEARCH_RESULT_LIMIT);
-                    placePickerFragment.loadData(true);
+                    placePickerFragment.loadData(false);
                 } else {
                     onError(getResources().getString(R.string.no_location_error), true);
                 }

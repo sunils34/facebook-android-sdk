@@ -25,13 +25,14 @@ import android.os.ConditionVariable;
 import android.os.Handler;
 import android.test.ActivityInstrumentationTestCase2;
 import android.util.Log;
+import com.facebook.model.GraphObject;
+import com.facebook.internal.Utility;
 import junit.framework.AssertionFailedError;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,13 +69,12 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
 
     // Returns an un-opened TestSession
     protected TestSession getTestSessionWithSharedUser(String sessionUniqueUserTag) {
-        return getTestSessionWithSharedUserAndPermissions(sessionUniqueUserTag, (String[]) null);
+        return getTestSessionWithSharedUserAndPermissions(sessionUniqueUserTag, new ArrayList<String>());
     }
 
     protected TestSession getTestSessionWithSharedUserAndPermissions(String sessionUniqueUserTag,
-            String... permissions) {
-        List<String> permissionsList = (permissions != null) ? Arrays.asList(permissions) : null;
-        return TestSession.createSessionWithSharedUser(getActivity(), permissionsList, sessionUniqueUserTag);
+            List<String> permissions) {
+        return TestSession.createSessionWithSharedUser(getActivity(), permissions, sessionUniqueUserTag);
     }
 
     // Returns an un-opened TestSession
@@ -102,6 +102,12 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
 
     protected TestSession openTestSessionWithSharedUserAndPermissions(String sessionUniqueUserTag,
             String... permissions) {
+        List<String> permissionList = (permissions != null) ? Arrays.asList(permissions) : null;
+        return openTestSessionWithSharedUserAndPermissions(sessionUniqueUserTag, permissionList);
+    }
+
+    protected TestSession openTestSessionWithSharedUserAndPermissions(String sessionUniqueUserTag,
+            List<String> permissions) {
         final TestBlocker blocker = getTestBlocker();
         TestSession session = getTestSessionWithSharedUserAndPermissions(sessionUniqueUserTag, permissions);
         openSession(getActivity(), session, blocker);
@@ -171,11 +177,8 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
                     fail(errorMessage + "one or both config values are missing");
                 }
 
-                String machineUniqueUserTag = jsonObject.optString("machineUniqueUserTag");
-
                 TestSession.setTestApplicationId(applicationId);
                 TestSession.setTestApplicationSecret(applicationSecret);
-                TestSession.setMachineUniqueUserTag(machineUniqueUserTag);
             } catch (IOException e) {
                 fail(errorMessage + e.toString());
             } catch (JSONException e) {
@@ -228,8 +231,8 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         readApplicationIdAndSecret();
 
         // These are useful for debugging unit test failures.
-        Settings.addLoggingBehavior(LoggingBehaviors.REQUESTS);
-        Settings.addLoggingBehavior(LoggingBehaviors.INCLUDE_ACCESS_TOKENS);
+        Settings.addLoggingBehavior(LoggingBehavior.REQUESTS);
+        Settings.addLoggingBehavior(LoggingBehavior.INCLUDE_ACCESS_TOKENS);
 
         // We want the UI thread to be in StrictMode to catch any violations.
         turnOnStrictModeForUiThread();
@@ -243,6 +246,19 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         }
     }
 
+    protected Bundle getNativeLinkingExtras(String token) {
+        Bundle extras = new Bundle();
+        String extraLaunchUriString = String
+                .format("fbrpc://facebook/nativethirdparty?app_id=%s&package_name=com.facebook.sdk.tests&class_name=com.facebook.FacebookActivityTests$FacebookTestActivity&access_token=%s",
+                        TestSession.getTestApplicationId(), token);
+        extras.putString("extra_launch_uri", extraLaunchUriString);
+        extras.putString("expires_in", "3600");
+        extras.putLong("app_id", Long.parseLong(TestSession.getTestApplicationId()));
+        extras.putString("access_token", token);
+
+        return extras;
+    }
+
     interface GraphObjectPostResult extends GraphObject {
         String getId();
     }
@@ -252,8 +268,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         Response response = request.executeAndWait();
         assertNotNull(response);
 
-        Exception exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphObject result = response.getGraphObject();
         assertNotNull(result);
@@ -266,8 +281,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         Response response = request.executeAndWait();
         assertNotNull(response);
 
-        Exception exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphObjectPostResult result = response.getGraphObjectAs(GraphObjectPostResult.class);
         assertNotNull(result);
@@ -318,7 +332,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
     }
 
     protected GraphObject createStatusUpdate() {
-        GraphObject statusUpdate = GraphObjectWrapper.createGraphObject();
+        GraphObject statusUpdate = GraphObject.Factory.create();
         String message = String.format(
                 "Check out my awesome new status update posted at: %s. Some chars for you: +\"[]:,", new Date());
         statusUpdate.setProperty("message", message);
@@ -336,10 +350,8 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         Request request = Request.newPostRequest(session, graphPath, null, null);
         Response response = request.executeAndWait();
         // We will get a 400 error if the users are already friends.
-        FacebookException error = response.getError();
-        assertTrue(error == null ||
-                (error instanceof FacebookServiceErrorException && ((FacebookServiceErrorException) error)
-                        .getHttpResponseCode() == 400));
+        FacebookRequestError error = response.getError();
+        assertTrue(error == null || error.getRequestStatusCode() == 400);
     }
 
     protected void makeTestUsersFriends(TestSession session1, TestSession session2) {
@@ -347,11 +359,47 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         issueFriendRequest(session2, session1.getTestUserId());
     }
 
+    protected void assertDateEqualsWithinDelta(Date expected, Date actual, long deltaInMsec) {
+        long delta = Math.abs(expected.getTime() - actual.getTime());
+        assertTrue(delta < deltaInMsec);
+    }
+
+    protected void assertDateDiffersWithinDelta(Date expected, Date actual, long expectedDifference, long deltaInMsec) {
+        long delta = Math.abs(expected.getTime() - actual.getTime()) - expectedDifference;
+        assertTrue(delta < deltaInMsec);
+    }
+
     protected void assertNoErrors(List<Response> responses) {
         for (int i = 0; i < responses.size(); ++i) {
             Response response = responses.get(i);
             assertNotNull(response);
             assertNull(response.getError());
+        }
+    }
+
+    protected File createTempFileFromAsset(String assetPath) throws IOException {
+        InputStream inputStream = null;
+        FileOutputStream outStream = null;
+
+        try {
+            AssetManager assets = getInstrumentation().getContext().getResources().getAssets();
+            inputStream = assets.open(assetPath);
+
+            File outputDir = getActivity().getCacheDir(); // context being the Activity pointer
+            File outputFile = File.createTempFile("prefix", assetPath, outputDir);
+            outStream = new FileOutputStream(outputFile);
+
+            final int bufferSize = 1024 * 2;
+            byte[] buffer = new byte[bufferSize];
+            int n = 0;
+            while ((n = inputStream.read(buffer)) != -1) {
+                outStream.write(buffer, 0, n);
+            }
+
+            return outputFile;
+        } finally {
+            Utility.closeQuietly(outStream);
+            Utility.closeQuietly(inputStream);
         }
     }
 
@@ -525,7 +573,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
 
                 // We expect either success or failure.
                 if (expectSuccess && response.getError() != null) {
-                    throw response.getError();
+                    throw response.getError().getException();
                 } else if (!expectSuccess && response.getError() == null) {
                     throw new FacebookException("Expected failure case, received no error");
                 }
@@ -558,7 +606,38 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         }
     }
 
+    public static abstract class MockRequest extends Request {
+        public abstract Response createResponse();
+    }
+
+    public static class MockRequestBatch extends RequestBatch {
+        public MockRequestBatch(MockRequest... requests) {
+            super(requests);
+        }
+
+        // Caller must ensure that all the requests in the batch are, in fact, MockRequests.
+        public MockRequestBatch(RequestBatch requests) {
+            super(requests);
+        }
+
+        @Override
+        List<Response> executeAndWaitImpl() {
+            List<Request> requests = getRequests();
+
+            List<Response> responses = new ArrayList<Response>();
+            for (Request request : requests) {
+                MockRequest mockRequest = (MockRequest) request;
+                responses.add(mockRequest.createResponse());
+            }
+
+            Request.runCallbacks(this, responses);
+
+            return responses;
+        }
+    }
+
     private AtomicBoolean strictModeOnForUiThread = new AtomicBoolean();
+
     protected void turnOnStrictModeForUiThread() {
         // We only ever need to do this once. If the boolean is true, we know that the next runnable
         // posted to the UI thread will have strict mode on.

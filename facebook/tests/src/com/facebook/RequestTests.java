@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.facebook;
 
 import android.graphics.Bitmap;
@@ -22,11 +23,13 @@ import android.os.Bundle;
 import android.test.suitebuilder.annotation.LargeTest;
 import android.test.suitebuilder.annotation.MediumTest;
 import android.test.suitebuilder.annotation.SmallTest;
+import com.facebook.model.*;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -46,7 +49,7 @@ public class RequestTests extends FacebookTestCase {
     @MediumTest
     @LargeTest
     public void testCreatePostRequest() {
-        GraphObject graphObject = GraphObjectWrapper.createGraphObject();
+        GraphObject graphObject = GraphObject.Factory.create();
         Request request = Request.newPostRequest(null, "me/statuses", graphObject, null);
         assertTrue(request != null);
         assertEquals(HttpMethod.POST, request.getHttpMethod());
@@ -94,7 +97,7 @@ public class RequestTests extends FacebookTestCase {
     @SmallTest
     @MediumTest
     @LargeTest
-    public void testCreatePlacesSearchRequest() {
+    public void testCreatePlacesSearchRequestWithLocation() {
         Location location = new Location("");
         location.setLatitude(47.6204);
         location.setLongitude(-122.3491);
@@ -109,28 +112,23 @@ public class RequestTests extends FacebookTestCase {
     @SmallTest
     @MediumTest
     @LargeTest
-    public void testCreatePlacesSearchRequestRequiresLocationOrSearchText() {
-        try {
-            Request request = Request.newPlacesSearchRequest(null, null, 1000, 50, null, null);
+    public void testCreatePlacesSearchRequestWithSearchText() {
+        Request request = Request.newPlacesSearchRequest(null, null, 1000, 50, "Starbucks", null);
 
-            assertTrue(request != null);
-            assertEquals(HttpMethod.GET, request.getHttpMethod());
-            assertEquals("search", request.getGraphPath());
-
-            fail("expected exception");
-        } catch (FacebookException exception) {
-            // Success
-        }
+        assertTrue(request != null);
+        assertEquals(HttpMethod.GET, request.getHttpMethod());
+        assertEquals("search", request.getGraphPath());
     }
 
     @SmallTest
     @MediumTest
     @LargeTest
-    public void testCreatePlacesSearchRequestRequiresLocation() {
+    public void testCreatePlacesSearchRequestRequiresLocationOrSearchText() {
         try {
-            Request.newPlacesSearchRequest(null, null, 1000, 50, null, null);
-            fail("expected NullPointerException");
+            Request request = Request.newPlacesSearchRequest(null, null, 1000, 50, null, null);
+            fail("expected exception");
         } catch (FacebookException exception) {
+            // Success
         }
     }
 
@@ -278,14 +276,15 @@ public class RequestTests extends FacebookTestCase {
 
         assertTrue(response != null);
 
-        FacebookException exception = response.getError();
-        assertTrue(exception != null);
+        FacebookRequestError error = response.getError();
+        assertNotNull(error);
+        FacebookException exception = error.getException();
+        assertNotNull(exception);
 
-        assertTrue(exception instanceof FacebookServiceErrorException);
-        FacebookServiceErrorException serviceException = (FacebookServiceErrorException) exception;
-        assertTrue(serviceException.getFacebookErrorType() != null);
-        assertTrue(serviceException.getFacebookErrorCode() != FacebookServiceErrorException.UNKNOWN_ERROR_CODE);
-        assertTrue(serviceException.getResponseBody() != null);
+        assertTrue(exception instanceof FacebookServiceException);
+        assertNotNull(error.getErrorType());
+        assertTrue(error.getErrorCode() != FacebookRequestError.INVALID_ERROR_CODE);
+        assertNotNull(error.getRequestResultBody());
     }
 
     @LargeTest
@@ -301,13 +300,12 @@ public class RequestTests extends FacebookTestCase {
 
         assertTrue(response != null);
 
-        FacebookException exception = response.getError();
-        assertTrue(exception != null);
+        FacebookRequestError error = response.getError();
+        assertNotNull(error);
 
-        assertTrue(exception instanceof FacebookServiceErrorException);
-        FacebookServiceErrorException serviceException = (FacebookServiceErrorException) exception;
-        assertTrue(serviceException.getFacebookErrorCode() != FacebookServiceErrorException.UNKNOWN_ERROR_CODE);
-        assertTrue(serviceException.getResponseBody() != null);
+        assertTrue(error.getException() instanceof FacebookServiceException);
+        assertTrue(error.getErrorCode() != FacebookRequestError.INVALID_ERROR_CODE);
+        assertNotNull(error.getRequestResultBody());
     }
 
     @MediumTest
@@ -317,8 +315,7 @@ public class RequestTests extends FacebookTestCase {
         Request request = new Request(session, "me");
         Response response = request.executeAndWait();
 
-        FacebookException exception = response.getError();
-        assertNotNull(exception);
+        assertNotNull(response.getError());
     }
 
     @MediumTest
@@ -332,8 +329,7 @@ public class RequestTests extends FacebookTestCase {
     }
 
     static void validateMeResponse(TestSession session, Response response) {
-        FacebookException exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphUser me = response.getGraphObjectAs(GraphUser.class);
         assertNotNull(me);
@@ -365,7 +361,7 @@ public class RequestTests extends FacebookTestCase {
 
     @MediumTest
     @LargeTest
-    public void testExecutePlaceRequest() {
+    public void testExecutePlaceRequestWithLocation() {
         TestSession session = openTestSessionWithSharedUser();
 
         Location location = new Location("");
@@ -373,6 +369,47 @@ public class RequestTests extends FacebookTestCase {
         location.setLongitude(-122.3491);
 
         Request request = Request.newPlacesSearchRequest(session, location, 5, 5, null, null);
+        Response response = request.executeAndWait();
+        assertNotNull(response);
+
+        assertNull(response.getError());
+
+        GraphMultiResult graphResult = response.getGraphObjectAs(GraphMultiResult.class);
+        assertNotNull(graphResult);
+
+        List<GraphObject> results = graphResult.getData();
+        assertNotNull(results);
+    }
+
+    @MediumTest
+    @LargeTest
+    public void testExecutePlaceRequestWithSearchText() {
+        TestSession session = openTestSessionWithSharedUser();
+
+        // Pass a distance without a location to ensure it is correctly ignored.
+        Request request = Request.newPlacesSearchRequest(session, null, 1000, 5, "Starbucks", null);
+        Response response = request.executeAndWait();
+        assertNotNull(response);
+
+        assertNull(response.getError());
+
+        GraphMultiResult graphResult = response.getGraphObjectAs(GraphMultiResult.class);
+        assertNotNull(graphResult);
+
+        List<GraphObject> results = graphResult.getData();
+        assertNotNull(results);
+    }
+
+    @MediumTest
+    @LargeTest
+    public void testExecutePlaceRequestWithLocationAndSearchText() {
+        TestSession session = openTestSessionWithSharedUser();
+
+        Location location = new Location("");
+        location.setLatitude(47.6204);
+        location.setLongitude(-122.3491);
+
+        Request request = Request.newPlacesSearchRequest(session, location, 1000, 5, "Starbucks", null);
         Response response = request.executeAndWait();
         assertNotNull(response);
 
@@ -394,8 +431,7 @@ public class RequestTests extends FacebookTestCase {
         Response response = request.executeAndWait();
         assertNotNull(response);
 
-        Exception exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphObject result = response.getGraphObject();
         assertNotNull(result);
@@ -422,17 +458,40 @@ public class RequestTests extends FacebookTestCase {
             Response response = request.executeAndWait();
             assertNotNull(response);
 
-            Exception exception = response.getError();
-            assertNull(exception);
+            assertNull(response.getError());
 
             GraphObject result = response.getGraphObject();
             assertNotNull(result);
         } finally {
             if (outStream != null) {
-                outStream.close();;
+                outStream.close();
             }
             if (outputFile != null) {
                 outputFile.delete();
+            }
+        }
+    }
+
+    @LargeTest
+    public void testUploadVideoFile() throws IOException, URISyntaxException {
+        File tempFile = null;
+        try {
+            TestSession session = openTestSessionWithSharedUser();
+            tempFile = createTempFileFromAsset("DarkScreen.mov");
+
+            Request request = Request.newUploadVideoRequest(session, tempFile, null);
+            Response response = request.executeAndWait();
+            assertNotNull(response);
+
+            assertNull(response.getError());
+
+            GraphObject result = response.getGraphObject();
+            assertNotNull(result);
+        } catch (Exception ex) {
+            return;
+        } finally {
+            if (tempFile != null) {
+                tempFile.delete();
             }
         }
     }
@@ -523,6 +582,103 @@ public class RequestTests extends FacebookTestCase {
         request.setGraphPath("me");
         request.setRestMethod("amethod");
         request.setCallback(new ExpectFailureCallback());
-        request.executeAndWait();
+
+        TestRequestAsyncTask task = new TestRequestAsyncTask(request);
+        task.executeOnBlockerThread();
+
+        waitAndAssertSuccess(1);
+    }
+
+    @MediumTest
+    @LargeTest
+    public void testClosedSessionDoesntAppendAccessToken() {
+        TestSession session = openTestSessionWithSharedUser();
+        session.close();
+        Request request = new Request(session, "me", null, null, new ExpectFailureCallback());
+
+        TestRequestAsyncTask task = new TestRequestAsyncTask(request);
+        task.executeOnBlockerThread();
+
+        waitAndAssertSuccess(1);
+    }
+
+    @MediumTest
+    @LargeTest
+    public void testCantUseComplexParameterInGetRequest() {
+        TestSession session = openTestSessionWithSharedUser();
+
+        Bundle parameters = new Bundle();
+        parameters.putShortArray("foo", new short[1]);
+
+        Request request = new Request(session, "me", parameters, HttpMethod.GET, new ExpectFailureCallback());
+        Response response = request.executeAndWait();
+
+        FacebookRequestError error = response.getError();
+        assertNotNull(error);
+        FacebookException exception = error.getException();
+        assertNotNull(exception);
+        assertTrue(exception.getMessage().contains("short[]"));
+    }
+
+    private final Location SEATTLE_LOCATION = new Location("") {
+        {
+            setLatitude(47.6097);
+            setLongitude(-122.3331);
+        }
+    };
+
+    @LargeTest
+    public void testPaging() {
+        TestSession session = openTestSessionWithSharedUser();
+        final List<GraphPlace> returnedPlaces = new ArrayList<GraphPlace>();
+        Request request = Request
+                .newPlacesSearchRequest(session, SEATTLE_LOCATION, 1000, 5, null, new Request.GraphPlaceListCallback() {
+                    @Override
+                    public void onCompleted(List<GraphPlace> places, Response response) {
+                        returnedPlaces.addAll(places);
+                    }
+                });
+        Response response = request.executeAndWait();
+
+        assertNull(response.getError());
+        assertNotNull(response.getGraphObject());
+        assertNotSame(0, returnedPlaces.size());
+
+        returnedPlaces.clear();
+
+        Request nextRequest = response.getRequestForPagedResults(Response.PagingDirection.NEXT);
+        assertNotNull(nextRequest);
+
+        nextRequest.setCallback(request.getCallback());
+        response = nextRequest.executeAndWait();
+
+        assertNull(response.getError());
+        assertNotNull(response.getGraphObject());
+        assertNotSame(0, returnedPlaces.size());
+
+        returnedPlaces.clear();
+
+        Request previousRequest = response.getRequestForPagedResults(Response.PagingDirection.PREVIOUS);
+        assertNotNull(previousRequest);
+
+        previousRequest.setCallback(request.getCallback());
+        response = previousRequest.executeAndWait();
+
+        assertNull(response.getError());
+        assertNotNull(response.getGraphObject());
+        assertNotSame(0, returnedPlaces.size());
+    }
+
+    @SmallTest
+    @MediumTest
+    @LargeTest
+    public void testRequestWithClosedSessionThrowsException() {
+        TestSession session = getTestSessionWithSharedUser();
+        assertFalse(session.isOpened());
+
+        Request request = new Request(session, "4");
+        Response response = request.executeAndWait();
+
+        assertNotNull(response.getError());
     }
 }

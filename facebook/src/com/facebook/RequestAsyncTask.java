@@ -21,9 +21,12 @@ import android.os.AsyncTask;
 import android.os.Handler;
 import android.util.Log;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 /**
  * Defines an AsyncTask suitable for executing a Request in the background. May be subclassed
@@ -32,15 +35,28 @@ import java.util.List;
 @TargetApi(3)
 public class RequestAsyncTask extends AsyncTask<Void, Void, List<Response>> {
     private static final String TAG = RequestAsyncTask.class.getCanonicalName();
+    private static Method executeOnExecutorMethod;
 
     private final HttpURLConnection connection;
     private final RequestBatch requests;
 
     private Exception exception;
 
+    static {
+        for (Method method : AsyncTask.class.getMethods()) {
+            if ("executeOnExecutor".equals(method.getName())) {
+                Class<?>[] parameters = method.getParameterTypes();
+                if ((parameters.length == 2) && (parameters[0] == Executor.class) && parameters[1].isArray()) {
+                    executeOnExecutorMethod = method;
+                    break;
+                }
+            }
+        }
+    }
+
     /**
      * Constructor. Serialization of the requests will be done in the background, so any serialization-
-     * related errors will be returned via the Response.getError() method.
+     * related errors will be returned via the Response.getException() method.
      *
      * @param requests the requests to execute
      */
@@ -50,7 +66,7 @@ public class RequestAsyncTask extends AsyncTask<Void, Void, List<Response>> {
 
     /**
      * Constructor. Serialization of the requests will be done in the background, so any serialization-
-     * related errors will be returned via the Response.getError() method.
+     * related errors will be returned via the Response.getException() method.
      *
      * @param requests the requests to execute
      */
@@ -60,7 +76,7 @@ public class RequestAsyncTask extends AsyncTask<Void, Void, List<Response>> {
 
     /**
      * Constructor. Serialization of the requests will be done in the background, so any serialization-
-     * related errors will be returned via the Response.getError() method.
+     * related errors will be returned via the Response.getException() method.
      *
      * @param requests the requests to execute
      */
@@ -112,6 +128,10 @@ public class RequestAsyncTask extends AsyncTask<Void, Void, List<Response>> {
         return exception;
     }
 
+    protected final RequestBatch getRequests() {
+        return requests;
+    }
+
     @Override
     public String toString() {
         return new StringBuilder().append("{RequestAsyncTask: ").append(" connection: ").append(connection)
@@ -133,7 +153,7 @@ public class RequestAsyncTask extends AsyncTask<Void, Void, List<Response>> {
         super.onPostExecute(result);
 
         if (exception != null) {
-            Log.d(TAG, String.format("onPostExecute: exception encountered during request: ", exception.getMessage()));
+            Log.d(TAG, String.format("onPostExecute: exception encountered during request: %s", exception.getMessage()));
         }
     }
 
@@ -141,7 +161,7 @@ public class RequestAsyncTask extends AsyncTask<Void, Void, List<Response>> {
     protected List<Response> doInBackground(Void... params) {
         try {
             if (connection == null) {
-                return Request.executeBatchAndWait(requests);
+                return requests.executeAndWait();
             } else {
                 return Request.executeConnectionAndWait(connection, requests);
             }
@@ -149,5 +169,21 @@ public class RequestAsyncTask extends AsyncTask<Void, Void, List<Response>> {
             exception = e;
             return null;
         }
+    }
+
+    RequestAsyncTask executeOnSettingsExecutor() {
+        try {
+            if (executeOnExecutorMethod != null) {
+                executeOnExecutorMethod.invoke(this, Settings.getExecutor(), null);
+                return this;
+            }
+        } catch (InvocationTargetException e) {
+            // fall-through
+        } catch (IllegalAccessException e) {
+            // fall-through
+        }
+
+        this.execute();
+        return this;
     }
 }

@@ -1,3 +1,19 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook.samples.profilepicture;
 
 import android.os.Bundle;
@@ -6,7 +22,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
-import com.facebook.ProfilePictureView;
+import com.facebook.widget.ProfilePictureView;
 
 import java.util.Date;
 import java.util.Random;
@@ -78,19 +94,19 @@ public class ProfilePictureSampleFragment extends Fragment {
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup parent, Bundle savedInstanceState) {
-        View v = inflater.inflate(R.layout.fragment_profile_picture_sample, parent, false);
+        View fragmentView = inflater.inflate(R.layout.fragment_profile_picture_sample, parent, false);
 
         randomGenerator = new Random((new Date()).getTime());
 
-        profilePic = (ProfilePictureView)v.findViewById(R.id.profilepic);
-        smallerButton = (Button)v.findViewById(R.id.smallerButton);
-        largerButton = (Button)v.findViewById(R.id.largerButton);
-        sizeLabel = (TextView)v.findViewById(R.id.sizeLabel);
-        presetSizeView = v.findViewById(R.id.presetSizeView);
-        customSizeView = (SeekBar)v.findViewById(R.id.customSizeView);
-        cropToggle = (CheckBox)v.findViewById(R.id.squareCropToggle);
+        profilePic = (ProfilePictureView) fragmentView.findViewById(R.id.profilepic);
+        smallerButton = (Button) fragmentView.findViewById(R.id.smallerButton);
+        largerButton = (Button) fragmentView.findViewById(R.id.largerButton);
+        sizeLabel = (TextView) fragmentView.findViewById(R.id.sizeLabel);
+        presetSizeView = fragmentView.findViewById(R.id.presetSizeView);
+        customSizeView = (SeekBar) fragmentView.findViewById(R.id.customSizeView);
+        cropToggle = (CheckBox) fragmentView.findViewById(R.id.squareCropToggle);
 
-        LinearLayout container = (LinearLayout)v.findViewById(R.id.userbuttoncontainer);
+        LinearLayout container = (LinearLayout) fragmentView.findViewById(R.id.userbuttoncontainer);
         int numChildren = container.getChildCount();
         for (int i = 0; i < numChildren; i++) {
             View childView = container.getChildAt(i);
@@ -111,7 +127,7 @@ public class ProfilePictureSampleFragment extends Fragment {
             }
         });
 
-        final Button sizeToggle = (Button)v.findViewById(R.id.sizeToggle);
+        final Button sizeToggle = (Button) fragmentView.findViewById(R.id.sizeToggle);
         sizeToggle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -176,7 +192,7 @@ public class ProfilePictureSampleFragment extends Fragment {
 
         restoreState(savedInstanceState);
 
-        return v;
+        return fragmentView;
     }
 
     @Override
@@ -208,7 +224,7 @@ public class ProfilePictureSampleFragment extends Fragment {
             profilePic.setCropped(cropToggle.isChecked());
 
             // Setting userId last so that only one network request is sent
-            profilePic.setUserId(firstUserId);
+            profilePic.setProfileId(firstUserId);
         }
     }
 
@@ -224,7 +240,7 @@ public class ProfilePictureSampleFragment extends Fragment {
                     // Random id.
                     userId = INTERESTING_IDS[randomGenerator.nextInt(INTERESTING_IDS.length)];
                 }
-                profilePic.setUserId(userId);
+                profilePic.setProfileId(userId);
             }
         });
     }

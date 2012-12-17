@@ -1,5 +1,5 @@
-/*
- * Copyright 2010 Facebook, Inc.
+/**
+ * Copyright 2010-present Facebook
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,8 @@ import java.net.MalformedURLException;
  * functionality could be built, such as rate-limiting of requests, as per
  * a specific application's needs.
  *
+ * @deprecated
+ *
  * @see RequestListener
  *        The callback interface.
  *
@@ -44,6 +46,7 @@ import java.net.MalformedURLException;
  *          Yariv Sadan (yariv@fb.com),
  *          Luke Shepard (lshepard@fb.com)
  */
+@Deprecated
 public class AsyncFacebookRunner {
 
     Facebook fb;

@@ -13,17 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.facebook;
 
 import android.graphics.Bitmap;
-import android.os.Handler;
 import android.test.suitebuilder.annotation.LargeTest;
 import android.test.suitebuilder.annotation.MediumTest;
 import android.test.suitebuilder.annotation.SmallTest;
+import com.facebook.model.GraphObject;
+import com.facebook.model.GraphPlace;
+import com.facebook.model.GraphUser;
+import com.facebook.internal.CacheableRequestBatch;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class BatchRequestTests extends FacebookTestCase {
     protected void setUp() throws Exception {
@@ -37,7 +42,7 @@ public class BatchRequestTests extends FacebookTestCase {
     @MediumTest
     @LargeTest
     public void testCreateEmptyRequestBatch() {
-        RequestBatch batch = new RequestBatch();
+        CacheableRequestBatch batch = new CacheableRequestBatch();
 
         Request meRequest = Request.newMeRequest(null, null);
         assertEquals(0, batch.size());
@@ -46,15 +51,9 @@ public class BatchRequestTests extends FacebookTestCase {
         assertEquals(meRequest, batch.get(0));
 
         String key = "The Key";
-        assertNull(batch.getCacheKey());
-        batch.setCacheKey(key);
-        assertEquals(key, batch.getCacheKey());
-
-        TestBlocker blocker = getTestBlocker();
-        Handler handler = blocker.getHandler();
-        assertNull(batch.getCallbackHandler());
-        batch.setCallbackHandler(handler);
-        assertNotNull(batch.getCallbackHandler());
+        assertNull(batch.getCacheKeyOverride());
+        batch.setCacheKeyOverride(key);
+        assertEquals(key, batch.getCacheKeyOverride());
 
         assertTrue(!batch.getForceRoundTrip());
         batch.setForceRoundTrip(true);
@@ -117,11 +116,10 @@ public class BatchRequestTests extends FacebookTestCase {
         assertTrue(responses.get(0).getError() != null);
         assertTrue(responses.get(1).getError() != null);
 
-        FacebookException exception1 = responses.get(0).getError();
-        assertTrue(exception1 instanceof FacebookServiceErrorException);
-        FacebookServiceErrorException serviceException1 = (FacebookServiceErrorException) exception1;
-        assertTrue(serviceException1.getFacebookErrorType() != null);
-        assertTrue(serviceException1.getFacebookErrorCode() != FacebookServiceErrorException.UNKNOWN_ERROR_CODE);
+        FacebookRequestError error = responses.get(0).getError();
+        assertTrue(error.getException() instanceof FacebookServiceException);
+        assertTrue(error.getErrorType() != null);
+        assertTrue(error.getErrorCode() != FacebookRequestError.INVALID_ERROR_CODE);
     }
 
     @LargeTest
@@ -272,6 +270,20 @@ public class BatchRequestTests extends FacebookTestCase {
         }
     }
 
+    @MediumTest
+    @LargeTest
+    public void testClosedSessionDoesntAppendAccessToken() {
+        TestSession session = openTestSessionWithSharedUser();
+        session.close();
+        Request request1 = new Request(session, "me", null, null, new ExpectFailureCallback());
+        Request request2 = new Request(session, "me", null, null, new ExpectFailureCallback());
+
+        TestRequestAsyncTask task = new TestRequestAsyncTask(request1, request2);
+        task.executeOnBlockerThread();
+
+        waitAndAssertSuccess(2);
+    }
+
     @LargeTest
     public void testBatchUploadPhoto() {
         TestSession session = openTestSessionWithSharedUserAndPermissions(null, "user_photos");
@@ -333,13 +345,13 @@ public class BatchRequestTests extends FacebookTestCase {
     @MediumTest
     @LargeTest
     public void testCacheMyFriendsRequest() throws IOException {
-        Response.getResponseCache().clear();
+        Response.getResponseCache().clearForTest();
         TestSession session = openTestSessionWithSharedUser();
 
         Request request = Request.newMyFriendsRequest(session, null);
 
-        RequestBatch batch = new RequestBatch(request);
-        batch.setCacheKey("MyFriends");
+        CacheableRequestBatch batch = new CacheableRequestBatch(request);
+        batch.setCacheKeyOverride("MyFriends");
 
         // Running the request with empty cache should hit the server.
         List<Response> responses = Request.executeBatchAndWait(batch);
@@ -372,20 +384,20 @@ public class BatchRequestTests extends FacebookTestCase {
         assertNull(response.getError());
         assertTrue(!response.getIsFromCache());
 
-        Response.getResponseCache().clear();
+        Response.getResponseCache().clearForTest();
     }
 
     @MediumTest
     @LargeTest
     public void testCacheMeAndMyFriendsRequest() throws IOException {
-        Response.getResponseCache().clear();
+        Response.getResponseCache().clearForTest();
         TestSession session = openTestSessionWithSharedUser();
 
         Request requestMe = Request.newMeRequest(session, null);
         Request requestMyFriends = Request.newMyFriendsRequest(session, null);
 
-        RequestBatch batch = new RequestBatch(new Request[] { requestMyFriends, requestMe });
-        batch.setCacheKey("MyFriends");
+        CacheableRequestBatch batch = new CacheableRequestBatch(new Request[] { requestMyFriends, requestMe });
+        batch.setCacheKeyOverride("MyFriends");
 
         // Running the request with empty cache should hit the server.
         List<Response> responses = Request.executeBatchAndWait(batch);
@@ -421,7 +433,7 @@ public class BatchRequestTests extends FacebookTestCase {
             assertTrue(!response.getIsFromCache());
         }
 
-        Response.getResponseCache().clear();
+        Response.getResponseCache().clearForTest();
     }
 
     @MediumTest
@@ -463,5 +475,63 @@ public class BatchRequestTests extends FacebookTestCase {
 
         assertNotNull(meResponse.getGraphObject());
         assertNotNull(myFriendsResponse.getGraphObject());
+    }
+
+    @SmallTest
+    @MediumTest
+    @LargeTest
+    public void testAddAndRemoveBatchCallbacks() {
+        RequestBatch batch = new RequestBatch();
+
+        RequestBatch.Callback callback1 = new RequestBatch.Callback() {
+            @Override
+            public void onBatchCompleted(RequestBatch batch) {
+            }
+        };
+
+        RequestBatch.Callback callback2 = new RequestBatch.Callback() {
+            @Override
+            public void onBatchCompleted(RequestBatch batch) {
+            }
+        };
+
+        batch.addCallback(callback1);
+        batch.addCallback(callback2);
+
+        assertEquals(2, batch.getCallbacks().size());
+
+        batch.removeCallback(callback1);
+        batch.removeCallback(callback2);
+
+        assertEquals(0, batch.getCallbacks().size());
+    }
+
+    @MediumTest
+    @LargeTest
+    public void testBatchCallbackIsCalled() {
+        final AtomicInteger count = new AtomicInteger();
+        Request request1 = Request.newGraphPathRequest(null, "4", new Request.Callback() {
+            @Override
+            public void onCompleted(Response response) {
+                count.incrementAndGet();
+            }
+        });
+        Request request2 = Request.newGraphPathRequest(null, "4", new Request.Callback() {
+            @Override
+            public void onCompleted(Response response) {
+                count.incrementAndGet();
+            }
+        });
+
+        RequestBatch batch = new RequestBatch(request1, request2);
+        batch.addCallback(new RequestBatch.Callback() {
+            @Override
+            public void onBatchCompleted(RequestBatch batch) {
+                count.incrementAndGet();
+            }
+        });
+
+        batch.executeAndWait();
+        assertEquals(3, count.get());
     }
 }

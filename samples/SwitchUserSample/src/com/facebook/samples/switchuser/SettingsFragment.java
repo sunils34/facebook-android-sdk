@@ -1,3 +1,19 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook.samples.switchuser;
 
 import android.content.Context;
@@ -6,8 +22,8 @@ import android.os.Bundle;
 import android.support.v4.app.ListFragment;
 import android.view.*;
 import android.widget.*;
-import com.facebook.GraphUser;
-import com.facebook.ProfilePictureView;
+import com.facebook.model.GraphUser;
+import com.facebook.widget.ProfilePictureView;
 import com.facebook.SessionLoginBehavior;
 
 import java.util.ArrayList;
@@ -40,27 +56,27 @@ public class SettingsFragment extends ListFragment {
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup parent, Bundle savedInstanceState) {
-        View v = super.onCreateView(inflater, parent, savedInstanceState);
-        registerForContextMenu(v.findViewById(android.R.id.list));
+        View view = super.onCreateView(inflater, parent, savedInstanceState);
+        registerForContextMenu(view.findViewById(android.R.id.list));
 
-        return v;
+        return view;
     }
 
     @Override
-    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenu.ContextMenuInfo menuInfo) {
-        super.onCreateContextMenu(menu, v, menuInfo);
+    public void onCreateContextMenu(ContextMenu menu, View view, ContextMenu.ContextMenuInfo menuInfo) {
+        super.onCreateContextMenu(menu, view, menuInfo);
         getActivity().getMenuInflater().inflate(R.menu.context_settings, menu);
     }
 
     @Override
-    public void onListItemClick(ListView l, View v, int position, long id) {
+    public void onListItemClick(ListView l, View view, int position, long id) {
         slotManager.toggleSlot(position);
     }
 
     @Override
     public boolean onContextItemSelected(MenuItem item) {
-        AdapterView.AdapterContextMenuInfo info = (AdapterView.AdapterContextMenuInfo)item.getMenuInfo();
-        SlotAdapter adapter = (SlotAdapter)getListAdapter();
+        AdapterView.AdapterContextMenuInfo info = (AdapterView.AdapterContextMenuInfo) item.getMenuInfo();
+        SlotAdapter adapter = (SlotAdapter) getListAdapter();
         Slot slot = adapter.getItem(info.position);
 
         switch (item.getItemId()) {
@@ -122,19 +138,19 @@ public class SettingsFragment extends ListFragment {
         OnSlotChangedListener listener = slotChangedListener;
         if (listener != null) {
             Slot newSlot = slotManager.getSelectedSlot();
-            listener.OnSlotChanged(newSlot);
+            listener.onSlotChanged(newSlot);
         } else {
             hasPendingNotifySlotChanged = true;
         }
     }
 
     private void updateListView() {
-        SlotAdapter adapter = (SlotAdapter)getListAdapter();
+        SlotAdapter adapter = (SlotAdapter) getListAdapter();
         adapter.notifyDataSetChanged();
     }
 
     public interface OnSlotChangedListener {
-        void OnSlotChanged(Slot newSlot);
+        void onSlotChanged(Slot newSlot);
     }
 
     private class SlotAdapter extends ArrayAdapter<Slot> {
@@ -156,16 +172,16 @@ public class SettingsFragment extends ListFragment {
                 userName = getString(R.string.empty_slot);
             }
 
-            ProfilePictureView profilePictureView = (ProfilePictureView)convertView.findViewById(
+            ProfilePictureView profilePictureView = (ProfilePictureView) convertView.findViewById(
                     R.id.slotPic);
             profilePictureView.setCropped(true);
-            profilePictureView.setUserId(slot.getUserId());
+            profilePictureView.setProfileId(slot.getUserId());
 
-            TextView userNameTextView = (TextView)convertView.findViewById(
+            TextView userNameTextView = (TextView) convertView.findViewById(
                     R.id.slotUserName);
             userNameTextView.setText(userName);
 
-            CheckBox currentUserCheckBox = (CheckBox)convertView.findViewById(
+            CheckBox currentUserCheckBox = (CheckBox) convertView.findViewById(
                     R.id.currentUserIndicator);
             currentUserCheckBox.setChecked(slotManager.getSelectedSlot() == slot);
 
@@ -189,7 +205,7 @@ public class SettingsFragment extends ListFragment {
 
         void restore(Context context, int oldSelectedSlot) {
             if (context == null) {
-                throw new NullPointerException("context cannot be null");
+                throw new IllegalArgumentException("context cannot be null");
             }
 
             Context applicationContext = context.getApplicationContext();

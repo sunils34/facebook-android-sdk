@@ -1,5 +1,5 @@
-/*
- * Copyright 2004 - Present Facebook, Inc.
+/**
+ * Copyright 2010-present Facebook
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 
+@SuppressWarnings("deprecation")
 public class Hackbook extends Activity implements OnItemClickListener {
 
     /*
@@ -502,7 +503,8 @@ public class Hackbook extends Activity implements OnItemClickListener {
             try {
                 jsonObject = new JSONObject(response);
 
-                final String picURL = jsonObject.getString("picture");
+                final String picURL = jsonObject.getJSONObject("picture")
+                        .getJSONObject("data").getString("url");
                 final String name = jsonObject.getString("name");
                 Utility.userUID = jsonObject.getString("id");
 

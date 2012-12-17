@@ -24,6 +24,11 @@ import android.os.Handler;
 import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
 import android.util.Pair;
+import com.facebook.internal.ServerProtocol;
+import com.facebook.model.*;
+import com.facebook.internal.Logger;
+import com.facebook.internal.Utility;
+import com.facebook.internal.Validate;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -43,17 +48,17 @@ import java.util.Map.Entry;
  * href="https://developers.facebook.com/docs/reference/rest/">REST API</a>. The Request class provides functionality
  * relating to serializing and deserializing requests and responses, making calls in batches (with a single round-trip
  * to the service) and making calls asynchronously.
- * 
+ *
  * The particular service endpoint that a request targets is determined by either a graph path (see the
  * {@link #setGraphPath(String) setGraphPath} method) or a REST method name (see the {@link #setRestMethod(String)
  * setRestMethod} method); a single request may not target both.
- * 
+ *
  * A Request can be executed either anonymously or representing an authenticated user. In the former case, no Session
  * needs to be specified, while in the latter, a Session that is in an opened state must be provided. If requests are
  * executed in a batch, a Facebook application ID must be associated with the batch, either by supplying a Session for
  * at least one of the requests in the batch (the first one found in the batch will be used) or by calling the
  * {@link #setDefaultBatchApplicationId(String) setDefaultBatchApplicationId} method.
- * 
+ *
  * After completion of a request, its Session, if any, will be checked to determine if its Facebook access token needs
  * to be extended; if so, a request to extend it will be issued in the background.
  */
@@ -67,6 +72,7 @@ public class Request {
     private static final String ME = "me";
     private static final String MY_FRIENDS = "me/friends";
     private static final String MY_PHOTOS = "me/photos";
+    private static final String MY_VIDEOS = "me/videos";
     private static final String SEARCH = "search";
     private static final String MY_FEED = "me/feed";
 
@@ -92,9 +98,9 @@ public class Request {
     private static final String ATTACHMENT_FILENAME_PREFIX = "file";
     private static final String ATTACHED_FILES_PARAM = "attached_files";
     private static final String MIGRATION_BUNDLE_PARAM = "migration_bundle";
+    private static final String ISO_8601_FORMAT_STRING = "yyyy-MM-dd'T'HH:mm:ssZ";
 
     private static final String MIME_BOUNDARY = "3i2ndDfv2rTHiSisAbouNdArYfORhtTPEefj3q2f";
-    private static final SimpleDateFormat iso8601DateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US);
 
     private static String defaultBatchApplicationId;
 
@@ -108,6 +114,7 @@ public class Request {
     private boolean batchEntryOmitResultOnSuccess = true;
     private Bundle parameters;
     private Callback callback;
+    private String overriddenURL;
 
     /**
      * Constructs a request without a session, graph path, or any other parameters.
@@ -121,7 +128,7 @@ public class Request {
      * case the request is sent without an access token and thus is not executed in the context of any particular user.
      * Only certain graph requests can be expected to succeed in this case. If a Session is provided, it must be in an
      * opened state or the request will fail.
-     * 
+     *
      * @param session
      *            the Session to use, or null
      * @param graphPath
@@ -136,9 +143,9 @@ public class Request {
      * provided, in which case the request is sent without an access token and thus is not executed in the context of
      * any particular user. Only certain graph requests can be expected to succeed in this case. If a Session is
      * provided, it must be in an opened state or the request will fail.
-     * 
+     *
      * Depending on the httpMethod parameter, the object at the graph path may be retrieved, created, or deleted.
-     * 
+     *
      * @param session
      *            the Session to use, or null
      * @param graphPath
@@ -158,9 +165,9 @@ public class Request {
      * provided, in which case the request is sent without an access token and thus is not executed in the context of
      * any particular user. Only certain graph requests can be expected to succeed in this case. If a Session is
      * provided, it must be in an opened state or the request will fail.
-     * 
+     *
      * Depending on the httpMethod parameter, the object at the graph path may be retrieved, created, or deleted.
-     * 
+     *
      * @param session
      *            the Session to use, or null
      * @param graphPath
@@ -191,10 +198,19 @@ public class Request {
         }
     }
 
+    Request(Session session, URL overriddenURL) {
+        this.session = session;
+        this.overriddenURL = overriddenURL.toString();
+
+        setHttpMethod(HttpMethod.GET);
+
+        this.parameters = new Bundle();
+    }
+
     /**
      * Creates a new Request configured to post a GraphObject to a particular graph path, to either create or update the
      * object at that path.
-     * 
+     *
      * @param session
      *            the Session to use, or null; if non-null, the session must be in an opened state
      * @param graphPath
@@ -213,7 +229,7 @@ public class Request {
 
     /**
      * Creates a new Request configured to make a call to the Facebook REST API.
-     * 
+     *
      * @param session
      *            the Session to use, or null; if non-null, the session must be in an opened state
      * @param restMethod
@@ -233,7 +249,7 @@ public class Request {
 
     /**
      * Creates a new Request configured to retrieve a user's own profile.
-     * 
+     *
      * @param session
      *            the Session to use, or null; if non-null, the session must be in an opened state
      * @param callback
@@ -254,7 +270,7 @@ public class Request {
 
     /**
      * Creates a new Request configured to retrieve a user's friend list.
-     * 
+     *
      * @param session
      *            the Session to use, or null; if non-null, the session must be in an opened state
      * @param callback
@@ -275,7 +291,7 @@ public class Request {
 
     /**
      * Creates a new Request configured to upload a photo to the user's default photo album.
-     * 
+     *
      * @param session
      *            the Session to use, or null; if non-null, the session must be in an opened state
      * @param image
@@ -310,8 +326,26 @@ public class Request {
     }
 
     /**
+     * Creates a new Request configured to upload a photo to the user's default photo album. The photo
+     * will be read from the specified file descriptor.
+     *
+     * @param session  the Session to use, or null; if non-null, the session must be in an opened state
+     * @param file     the file to upload
+     * @param callback a callback that will be called when the request is completed to handle success or error conditions
+     * @return a Request that is ready to execute
+     */
+    public static Request newUploadVideoRequest(Session session, File file,
+            Callback callback) throws FileNotFoundException {
+        ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+        Bundle parameters = new Bundle(1);
+        parameters.putParcelable(file.getName(), descriptor);
+
+        return new Request(session, MY_VIDEOS, parameters, HttpMethod.POST, callback);
+    }
+
+    /**
      * Creates a new Request configured to retrieve a particular graph path.
-     * 
+     *
      * @param session
      *            the Session to use, or null; if non-null, the session must be in an opened state
      * @param graphPath
@@ -326,15 +360,16 @@ public class Request {
 
     /**
      * Creates a new Request that is configured to perform a search for places near a specified location via the Graph
-     * API.
-     * 
+     * API. At least one of location or searchText must be specified.
+     *
      * @param session
      *            the Session to use, or null; if non-null, the session must be in an opened state
      * @param location
      *            the location around which to search; only the latitude and longitude components of the location are
      *            meaningful
      * @param radiusInMeters
-     *            the radius around the location to search, specified in meters
+     *            the radius around the location to search, specified in meters; this is ignored if
+     *            no location is specified
      * @param resultsLimit
      *            the maximum number of results to return
      * @param searchText
@@ -353,10 +388,12 @@ public class Request {
 
         Bundle parameters = new Bundle(5);
         parameters.putString("type", "place");
-        parameters.putString("limit", String.format("%d", resultsLimit));
-        parameters.putString("distance", String.format("%d", radiusInMeters));
-        parameters.putString("center",
-                String.format(Locale.US, "%f,%f", location.getLatitude(), location.getLongitude()));
+        parameters.putInt("limit", resultsLimit);
+        if (location != null) {
+            parameters.putString("center",
+                    String.format(Locale.US, "%f,%f", location.getLatitude(), location.getLongitude()));
+            parameters.putInt("distance", radiusInMeters);
+        }
         if (!Utility.isNullOrEmpty(searchText)) {
             parameters.putString("q", searchText);
         }
@@ -393,7 +430,7 @@ public class Request {
 
     /**
      * Returns the GraphObject, if any, associated with this request.
-     * 
+     *
      * @return the GraphObject associated with this requeset, or null if there is none
      */
     public final GraphObject getGraphObject() {
@@ -402,7 +439,7 @@ public class Request {
 
     /**
      * Sets the GraphObject associated with this request. This is meaningful only for POST requests.
-     * 
+     *
      * @param graphObject
      *            the GraphObject to upload along with this request
      */
@@ -412,7 +449,7 @@ public class Request {
 
     /**
      * Returns the graph path of this request, if any.
-     * 
+     *
      * @return the graph path of this request, or null if there is none
      */
     public final String getGraphPath() {
@@ -421,7 +458,7 @@ public class Request {
 
     /**
      * Sets the graph path of this request. A graph path may not be set if a REST method has been specified.
-     * 
+     *
      * @param graphPath
      *            the graph path for this request
      */
@@ -431,7 +468,7 @@ public class Request {
 
     /**
      * Returns the {@link HttpMethod} to use for this request.
-     * 
+     *
      * @return the HttpMethod
      */
     public final HttpMethod getHttpMethod() {
@@ -440,17 +477,20 @@ public class Request {
 
     /**
      * Sets the {@link HttpMethod} to use for this request.
-     * 
+     *
      * @param httpMethod
      *            the HttpMethod, or null for the default (HttpMethod.GET).
      */
     public final void setHttpMethod(HttpMethod httpMethod) {
+        if (overriddenURL != null && httpMethod != HttpMethod.GET) {
+            throw new FacebookException("Can't change HTTP method on request with overridden URL.");
+            }
         this.httpMethod = (httpMethod != null) ? httpMethod : HttpMethod.GET;
     }
 
     /**
      * Returns the parameters for this request.
-     * 
+     *
      * @return the parameters
      */
     public final Bundle getParameters() {
@@ -459,7 +499,7 @@ public class Request {
 
     /**
      * Sets the parameters for this request.
-     * 
+     *
      * @param parameters
      *            the parameters
      */
@@ -469,7 +509,7 @@ public class Request {
 
     /**
      * Returns the REST method to call for this request.
-     * 
+     *
      * @return the REST method
      */
     public final String getRestMethod() {
@@ -478,7 +518,7 @@ public class Request {
 
     /**
      * Sets the REST method to call for this request. A REST method may not be set if a graph path has been specified.
-     * 
+     *
      * @param restMethod
      *            the REST method to call
      */
@@ -488,7 +528,7 @@ public class Request {
 
     /**
      * Returns the Session associated with this request.
-     * 
+     *
      * @return the Session associated with this request, or null if none has been specified
      */
     public final Session getSession() {
@@ -498,7 +538,7 @@ public class Request {
     /**
      * Sets the Session to use for this request. The Session does not need to be opened at the time it is specified, but
      * it must be opened by the time the request is executed.
-     * 
+     *
      * @param session
      *            the Session to use for this request
      */
@@ -508,7 +548,7 @@ public class Request {
 
     /**
      * Returns the name of this request's entry in a batched request.
-     * 
+     *
      * @return the name of this request's batch entry, or null if none has been specified
      */
     public final String getBatchEntryName() {
@@ -520,7 +560,7 @@ public class Request {
      * as part of a batched request. It can be used to specified dependencies between requests. See <a
      * href="https://developers.facebook.com/docs/reference/api/batch/">Batch Requests</a> in the Graph API
      * documentation for more details.
-     * 
+     *
      * @param batchEntryName
      *            the name of this request's entry in a batched request, which must be unique within a particular batch
      *            of requests
@@ -579,7 +619,7 @@ public class Request {
      * Gets the default Facebook application ID that will be used to submit batched requests if none of those requests
      * specifies a Session. Batched requests require an application ID, so either at least one request in a batch must
      * specify a Session or the application ID must be specified explicitly.
-     * 
+     *
      * @return the Facebook application ID to use for batched requests if none can be determined
      */
     public static final String getDefaultBatchApplicationId() {
@@ -590,7 +630,7 @@ public class Request {
      * Sets the default application ID that will be used to submit batched requests if none of those requests specifies
      * a Session. Batched requests require an application ID, so either at least one request in a batch must specify a
      * Session or the application ID must be specified explicitly.
-     * 
+     *
      * @param applicationId
      *            the Facebook application ID to use for batched requests if none can be determined
      */
@@ -600,7 +640,7 @@ public class Request {
 
     /**
      * Returns the callback which will be called when the request finishes.
-     * 
+     *
      * @return the callback
      */
     public final Callback getCallback() {
@@ -609,7 +649,7 @@ public class Request {
 
     /**
      * Sets the callback which will be called when the request finishes.
-     * 
+     *
      * @param callback
      *            the callback
      */
@@ -635,7 +675,7 @@ public class Request {
      */
     public static RequestAsyncTask executePostRequestAsync(Session session, String graphPath, GraphObject graphObject,
             Callback callback) {
-        return newPostRequest(session, graphPath,graphObject, callback).executeAsync();
+        return newPostRequest(session, graphPath, graphObject, callback).executeAsync();
     }
 
     /**
@@ -815,7 +855,7 @@ public class Request {
     /**
      * Serializes one or more requests but does not execute them. The resulting HttpURLConnection can be executed
      * explicitly by the caller.
-     * 
+     *
      * @param requests
      *            one or more Requests to serialize
      * @return an HttpURLConnection which is ready to execute
@@ -875,7 +915,8 @@ public class Request {
             if (requests.size() == 1) {
                 // Single request case.
                 Request request = requests.get(0);
-                url = request.getUrlForSingleRequest();
+                // In the non-batch case, the URL we use really is the same one returned by getUrlForSingleRequest.
+                url = new URL(request.getUrlForSingleRequest());
             } else {
                 // Batch case -- URL is just the graph API base, individual request URLs are serialized
                 // as relative_url parameters within each batch entry.
@@ -903,10 +944,10 @@ public class Request {
      * Executes a single request on the current thread and returns the response.
      * <p/>
      * This should only be used if you have transitioned off the UI thread.
-     * 
+     *
      * @param request
      *            the Request to execute
-     * 
+     *
      * @return the Response object representing the results of the request
      *
      * @throws FacebookException
@@ -929,7 +970,7 @@ public class Request {
      *
      * @param requests
      *            the Requests to execute
-     * 
+     *
      * @return a list of Response objects representing the results of the requests; responses are returned in the same
      *         order as the requests were specified.
      *
@@ -1000,7 +1041,7 @@ public class Request {
      * succeeded or failed, a callback must be specified (see the {@link #setCallback(Callback) setCallback} method).
      * <p/>
      * This should only be called from the UI thread.
-     * 
+     *
      * @param requests
      *            the Requests to execute
      * @return a RequestAsyncTask that is executing the request
@@ -1050,7 +1091,7 @@ public class Request {
         Validate.notEmptyAndContainsNoNulls(requests, "requests");
 
         RequestAsyncTask asyncTask = new RequestAsyncTask(requests);
-        asyncTask.execute();
+        asyncTask.executeOnSettingsExecutor();
         return asyncTask;
     }
 
@@ -1159,15 +1200,17 @@ public class Request {
      */
     public static RequestAsyncTask executeConnectionAsync(Handler callbackHandler, HttpURLConnection connection,
             RequestBatch requests) {
+        Validate.notNull(connection, "connection");
+
         RequestAsyncTask asyncTask = new RequestAsyncTask(connection, requests);
         requests.setCallbackHandler(callbackHandler);
-        asyncTask.execute();
+        asyncTask.executeOnSettingsExecutor();
         return asyncTask;
     }
 
     /**
      * Returns a string representation of this Request, useful for debugging.
-     * 
+     *
      * @return the debugging information
      */
     @Override
@@ -1178,7 +1221,7 @@ public class Request {
                 .append(parameters).append("}").toString();
     }
 
-    private static void runCallbacks(RequestBatch requests, List<Response> responses) {
+    static void runCallbacks(final RequestBatch requests, List<Response> responses) {
         int numRequests = requests.size();
 
         // Compile the list of callbacks to call and then run them either on this thread or via the Handler we received
@@ -1195,6 +1238,11 @@ public class Request {
                 public void run() {
                     for (Pair<Callback, Response> pair : callbacks) {
                         pair.first.onCompleted(pair.second);
+                    }
+
+                    List<RequestBatch.Callback> batchCallbacks = requests.getCallbacks();
+                    for (RequestBatch.Callback batchCallback : batchCallbacks) {
+                        batchCallback.onBatchCompleted(requests);
                     }
                 }
             };
@@ -1223,10 +1271,14 @@ public class Request {
 
 
     private void addCommonParameters() {
-        if (this.session != null && !this.parameters.containsKey(ACCESS_TOKEN_PARAM)) {
-            String accessToken = this.session.getAccessToken();
-            Logger.registerAccessToken(accessToken);
-            this.parameters.putString(ACCESS_TOKEN_PARAM, accessToken);
+        if (this.session != null) {
+            if (!this.session.isOpened()) {
+                throw new FacebookException("Session provided to a Request in un-opened state.");
+            } else if (!this.parameters.containsKey(ACCESS_TOKEN_PARAM)) {
+                String accessToken = this.session.getAccessToken();
+                Logger.registerAccessToken(accessToken);
+                this.parameters.putString(ACCESS_TOKEN_PARAM, accessToken);
+            }
         }
         this.parameters.putString(SDK_PARAM, SDK_ANDROID);
         this.parameters.putString(FORMAT_PARAM, FORMAT_JSON);
@@ -1239,22 +1291,32 @@ public class Request {
         for (String key : keys) {
             Object value = this.parameters.get(key);
 
-            if (!(value instanceof String)) {
-                if (httpMethod == HttpMethod.GET) {
-                    throw new IllegalArgumentException("Cannot use GET to upload a file.");
-                }
+            if (value == null) {
+                value = "";
+            }
 
-                // Skip non-strings. We add them later as attachments.
+            if (isSupportedParameterType(value)) {
+                value = parameterToString(value);
+            } else {
+                if (httpMethod == HttpMethod.GET) {
+                    throw new IllegalArgumentException(String.format("Unsupported parameter type for GET request: %s",
+                                    value.getClass().getSimpleName()));
+                }
                 continue;
             }
+
             uriBuilder.appendQueryParameter(key, value.toString());
         }
 
         return uriBuilder.toString();
     }
 
-    final String getUrlStringForBatchedRequest() throws MalformedURLException {
-        String baseUrl = null;
+    final String getUrlForBatchedRequest() {
+        if (overriddenURL != null) {
+            throw new FacebookException("Can't override URL for a batch request");
+        }
+
+        String baseUrl;
         if (this.restMethod != null) {
             baseUrl = ServerProtocol.BATCHED_REST_METHOD_URL_BASE + this.restMethod;
         } else {
@@ -1262,12 +1324,15 @@ public class Request {
         }
 
         addCommonParameters();
-        // We don't convert to a URL because it may only be part of a URL.
         return appendParametersToBaseUrl(baseUrl);
     }
 
-    final URL getUrlForSingleRequest() throws MalformedURLException {
-        String baseUrl = null;
+    final String getUrlForSingleRequest() {
+        if (overriddenURL != null) {
+            return overriddenURL.toString();
+        }
+
+        String baseUrl;
         if (this.restMethod != null) {
             baseUrl = ServerProtocol.REST_URL_BASE + this.restMethod;
         } else {
@@ -1275,8 +1340,9 @@ public class Request {
         }
 
         addCommonParameters();
-        return new URL(appendParametersToBaseUrl(baseUrl));
+        return appendParametersToBaseUrl(baseUrl);
     }
+
 
     private void serializeToBatch(JSONArray batch, Bundle attachments) throws JSONException, IOException {
         JSONObject batchEntry = new JSONObject();
@@ -1289,7 +1355,7 @@ public class Request {
             batchEntry.put(BATCH_ENTRY_DEPENDS_ON_PARAM, this.batchEntryDependsOn);
         }
 
-        String relativeURL = getUrlStringForBatchedRequest();
+        String relativeURL = getUrlForBatchedRequest();
         batchEntry.put(BATCH_RELATIVE_URL_PARAM, relativeURL);
         batchEntry.put(BATCH_METHOD_PARAM, httpMethod);
         if (this.session != null) {
@@ -1302,7 +1368,7 @@ public class Request {
         Set<String> keys = this.parameters.keySet();
         for (String key : keys) {
             Object value = this.parameters.get(key);
-            if (Serializer.isSupportedAttachmentType(value)) {
+            if (isSupportedAttachmentType(value)) {
                 // Make the name unique across this entire batch.
                 String name = String.format("%s%d", ATTACHMENT_FILENAME_PREFIX, attachments.size());
                 attachmentNames.add(name);
@@ -1339,7 +1405,7 @@ public class Request {
 
     final static void serializeToUrlConnection(RequestBatch requests, HttpURLConnection connection)
     throws IOException, JSONException {
-        Logger logger = new Logger(LoggingBehaviors.REQUESTS, "Request");
+        Logger logger = new Logger(LoggingBehavior.REQUESTS, "Request");
 
         int numRequests = requests.size();
 
@@ -1478,6 +1544,7 @@ public class Request {
             // dates in ISO-8601 format. Pre-migration apps can send as Unix timestamps. Since the future is ISO-8601,
             // that is what we support here. Apps that need pre-migration behavior can explicitly send these as
             // integer timestamps rather than Dates.
+            final SimpleDateFormat iso8601DateFormat = new SimpleDateFormat(ISO_8601_FORMAT_STRING, Locale.US);
             serializer.writeString(key, iso8601DateFormat.format(date));
         }
     }
@@ -1487,7 +1554,7 @@ public class Request {
 
         for (String key : keys) {
             Object value = bundle.get(key);
-            if (Serializer.isSupportedParameterType(value)) {
+            if (isSupportedParameterType(value)) {
                 serializer.writeObject(key, value);
             }
         }
@@ -1498,7 +1565,7 @@ public class Request {
 
         for (String key : keys) {
             Object value = bundle.get(key);
-            if (Serializer.isSupportedAttachmentType(value)) {
+            if (isSupportedAttachmentType(value)) {
                 serializer.writeObject(key, value);
             }
         }
@@ -1529,8 +1596,12 @@ public class Request {
         return userAgent;
     }
 
-    private static String getBatchAppId(Collection<Request> requests) {
-        for (Request request : requests) {
+    private static String getBatchAppId(RequestBatch batch) {
+        if (!Utility.isNullOrEmpty(batch.getBatchApplicationId())) {
+            return batch.getBatchApplicationId();
+        }
+
+        for (Request request : batch) {
             Session session = request.session;
             if (session != null) {
                 return session.getApplicationId();
@@ -1553,6 +1624,27 @@ public class Request {
         return data.castToListOf(clazz);
     }
 
+    private static boolean isSupportedAttachmentType(Object value) {
+        return value instanceof Bitmap || value instanceof byte[] || value instanceof ParcelFileDescriptor;
+    }
+
+    private static boolean isSupportedParameterType(Object value) {
+        return value instanceof String || value instanceof Boolean || value instanceof Number ||
+                value instanceof Date;
+    }
+
+    private static String parameterToString(Object value) {
+        if (value instanceof String) {
+            return (String) value;
+        } else if (value instanceof Boolean || value instanceof Number) {
+            return value.toString();
+        } else if (value instanceof Date) {
+            final SimpleDateFormat iso8601DateFormat = new SimpleDateFormat(ISO_8601_FORMAT_STRING, Locale.US);
+            return iso8601DateFormat.format(value);
+        }
+        throw new IllegalArgumentException("Unsupported parameter type.");
+    }
+
     private interface KeyValueSerializer {
         void writeString(String key, String value) throws IOException;
     }
@@ -1568,8 +1660,8 @@ public class Request {
         }
 
         public void writeObject(String key, Object value) throws IOException {
-            if (value instanceof String) {
-                writeString(key, (String) value);
+            if (isSupportedParameterType(value)) {
+                writeString(key, parameterToString(value));
             } else if (value instanceof Bitmap) {
                 writeBitmap(key, (Bitmap) value);
             } else if (value instanceof byte[]) {
@@ -1668,14 +1760,6 @@ public class Request {
             write("\r\n");
         }
 
-        public static boolean isSupportedAttachmentType(Object value) {
-            return value instanceof Bitmap || value instanceof byte[] || value instanceof ParcelFileDescriptor;
-        }
-
-        public static boolean isSupportedParameterType(Object value) {
-            return value instanceof String;
-        }
-
     }
 
     /**
@@ -1685,7 +1769,7 @@ public class Request {
     public interface Callback {
         /**
          * The method that will be called when a request completes.
-         * 
+         *
          * @param response
          *            the Response of this request, which may include error information if the request was unsuccessful
          */

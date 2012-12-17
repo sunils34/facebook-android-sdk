@@ -1,3 +1,19 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook.scrumptious;
 
 import android.app.Activity;
@@ -16,6 +32,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
 import com.facebook.*;
+import com.facebook.model.*;
+import com.facebook.widget.ProfilePictureView;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -32,6 +50,7 @@ public class SelectionFragment extends Fragment {
     private static final String TAG = "SelectionFragment";
     private static final String POST_ACTION_PATH = "me/fb_sample_scrumps:eat";
     private static final String PENDING_ANNOUNCE_KEY = "pendingAnnounce";
+    private static final Uri M_FACEBOOK_URL = Uri.parse("http://m.facebook.com");
 
     private static final int REAUTH_ACTIVITY_CODE = 100;
     private static final List<String> PERMISSIONS = Arrays.asList("publish_actions");
@@ -43,6 +62,27 @@ public class SelectionFragment extends Fragment {
     private ProfilePictureView profilePictureView;
     private TextView userNameView;
     private boolean pendingAnnounce;
+
+    private UiLifecycleHelper uiHelper;
+    private Session.StatusCallback callback = new Session.StatusCallback() {
+        @Override
+        public void call(final Session session, final SessionState state, final Exception exception) {
+            onSessionStateChange(session, state, exception);
+        }
+    };
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        uiHelper = new UiLifecycleHelper(getActivity(), callback);
+        uiHelper.onCreate(savedInstanceState);
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        uiHelper.onResume();
+    }
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -63,21 +103,6 @@ public class SelectionFragment extends Fragment {
         });
         init(savedInstanceState);
 
-        final Session session = Session.getActiveSession();
-        if (session != null && session.isOpened()) {
-            Request request = Request.newMeRequest(session, new Request.GraphUserCallback() {
-                @Override
-                public void onCompleted(GraphUser user, Response response) {
-                    if (session == Session.getActiveSession()) {
-                        if (user != null) {
-                            profilePictureView.setUserId(user.getId());
-                            userNameView.setText(user.getName());
-                        }
-                    }
-                }
-            });
-            Request.executeBatchAsync(request);
-        }
         return view;
     }
 
@@ -85,7 +110,7 @@ public class SelectionFragment extends Fragment {
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REAUTH_ACTIVITY_CODE) {
-            Session.getActiveSession().onActivityResult(getActivity(), requestCode, resultCode, data);
+            uiHelper.onActivityResult(requestCode, resultCode, data);
         } else if (resultCode == Activity.RESULT_OK && requestCode >= 0 && requestCode < listElements.size()) {
             listElements.get(requestCode).onActivityResult(data);
         }
@@ -98,15 +123,57 @@ public class SelectionFragment extends Fragment {
             listElement.onSaveInstanceState(bundle);
         }
         bundle.putBoolean(PENDING_ANNOUNCE_KEY, pendingAnnounce);
+        uiHelper.onSaveInstanceState(bundle);
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        uiHelper.onPause();
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        uiHelper.onDestroy();
     }
 
     /**
      * Notifies that the session token has been updated.
      */
-    public void tokenUpdated() {
+    private void tokenUpdated() {
         if (pendingAnnounce) {
             handleAnnounce();
         }
+    }
+
+    private void onSessionStateChange(final Session session, SessionState state, Exception exception) {
+        if (session != null && session.isOpened()) {
+            if (state.equals(SessionState.OPENED_TOKEN_UPDATED)) {
+                tokenUpdated();
+            } else {
+                makeMeRequest(session);
+            }
+        }
+    }
+
+    private void makeMeRequest(final Session session) {
+        Request request = Request.newMeRequest(session, new Request.GraphUserCallback() {
+            @Override
+            public void onCompleted(GraphUser user, Response response) {
+                if (session == Session.getActiveSession()) {
+                    if (user != null) {
+                        profilePictureView.setProfileId(user.getId());
+                        userNameView.setText(user.getName());
+                    }
+                }
+                if (response.getError() != null) {
+                    handleError(response.getError());
+                }
+            }
+        });
+        request.executeAsync();
+
     }
 
     /**
@@ -129,6 +196,11 @@ public class SelectionFragment extends Fragment {
         }
 
         listView.setAdapter(new ActionListAdapter(getActivity(), R.id.selection_list, listElements));
+
+        Session session = Session.getActiveSession();
+        if (session != null && session.isOpened()) {
+            makeMeRequest(session);
+        }
     }
 
     private void handleAnnounce() {
@@ -142,9 +214,7 @@ public class SelectionFragment extends Fragment {
         List<String> permissions = session.getPermissions();
         if (!permissions.containsAll(PERMISSIONS)) {
             pendingAnnounce = true;
-            Session.ReauthorizeRequest reauthRequest = new Session.ReauthorizeRequest(this, PERMISSIONS).
-                    setRequestCode(REAUTH_ACTIVITY_CODE);
-            session.reauthorizeForPublish(reauthRequest);
+            requestPublishPermissions(session);
             return;
         }
 
@@ -158,7 +228,7 @@ public class SelectionFragment extends Fragment {
 
             @Override
             protected Response doInBackground(Void... voids) {
-                EatAction eatAction = GraphObjectWrapper.createGraphObject(EatAction.class);
+                EatAction eatAction = GraphObject.Factory.create(EatAction.class);
                 for (BaseListElement element : listElements) {
                     element.populateOGAction(eatAction);
                 }
@@ -177,47 +247,123 @@ public class SelectionFragment extends Fragment {
         task.execute();
     }
 
+    private void requestPublishPermissions(Session session) {
+        if (session != null) {
+            Session.NewPermissionsRequest newPermissionsRequest = new Session.NewPermissionsRequest(this, PERMISSIONS)
+                    // demonstrate how to set an audience for the publish permissions,
+                    // if none are set, this defaults to FRIENDS
+                    .setDefaultAudience(SessionDefaultAudience.FRIENDS)
+                    .setRequestCode(REAUTH_ACTIVITY_CODE);
+            session.requestNewPublishPermissions(newPermissionsRequest);
+        }
+    }
+
     private void onPostActionResponse(Response response) {
         if (progressDialog != null) {
             progressDialog.dismiss();
             progressDialog = null;
         }
-        String id = getIdFromResponseOrShowError(response);
-        if (id != null) {
-            String dialogBody = String.format(getActivity().getResources().getString(R.string.result_dialog_text), id);
-            AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
-            builder.setPositiveButton(R.string.result_dialog_button_text, null).
-                    setTitle(R.string.result_dialog_title).setMessage(dialogBody);
-            builder.show();
+        if (getActivity() == null) {
+            // if the user removes the app from the website, then a request will
+            // have caused the session to close (since the token is no longer valid),
+            // which means the splash fragment will be shown rather than this one,
+            // causing activity to be null. If the activity is null, then we cannot
+            // show any dialogs, so we return.
+            return;
         }
-        init(null);
-    }
 
-    private String getIdFromResponseOrShowError(Response response) {
         PostResponse postResponse = response.getGraphObjectAs(PostResponse.class);
 
-        String id = null;
-        PostResponse.Body body = null;
-        if (postResponse != null) {
-            id = postResponse.getId();
-            body = postResponse.getBody();
+        if (postResponse != null && postResponse.getId() != null) {
+            String dialogBody = String.format(getString(R.string.result_dialog_text), postResponse.getId());
+            new AlertDialog.Builder(getActivity())
+                    .setPositiveButton(R.string.result_dialog_button_text, null)
+                    .setTitle(R.string.result_dialog_title)
+                    .setMessage(dialogBody)
+                    .show();
+            init(null);
+        } else {
+            handleError(response.getError());
+        }
+    }
+
+    private void handleError(FacebookRequestError error) {
+        DialogInterface.OnClickListener listener = null;
+        String dialogBody = null;
+
+        if (error == null) {
+            dialogBody = getString(R.string.error_dialog_default_text);
+        } else {
+            switch (error.getCategory()) {
+                case AUTHENTICATION_RETRY:
+                    // tell the user what happened by getting the message id, and
+                    // retry the operation later
+                    String userAction = (error.shouldNotifyUser()) ? "" :
+                            getString(error.getUserActionMessageId());
+                    dialogBody = getString(R.string.error_authentication_retry, userAction);
+                    listener = new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialogInterface, int i) {
+                            Intent intent = new Intent(Intent.ACTION_VIEW, M_FACEBOOK_URL);
+                            startActivity(intent);
+                        }
+                    };
+                    break;
+
+                case AUTHENTICATION_REOPEN_SESSION:
+                    // close the session and reopen it.
+                    dialogBody = getString(R.string.error_authentication_reopen);
+                    listener = new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialogInterface, int i) {
+                            Session session = Session.getActiveSession();
+                            if (session != null && !session.isClosed()) {
+                                session.closeAndClearTokenInformation();
+                            }
+                        }
+                    };
+                    break;
+
+                case PERMISSION:
+                    // request the publish permission
+                    dialogBody = getString(R.string.error_permission);
+                    listener = new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialogInterface, int i) {
+                            pendingAnnounce = true;
+                            requestPublishPermissions(Session.getActiveSession());
+                        }
+                    };
+                    break;
+
+                case SERVER:
+                case THROTTLING:
+                    // this is usually temporary, don't clear the fields, and
+                    // ask the user to try again
+                    dialogBody = getString(R.string.error_server);
+                    break;
+
+                case BAD_REQUEST:
+                    // this is likely a coding error, ask the user to file a bug
+                    dialogBody = getString(R.string.error_bad_request, error.getErrorMessage());
+                    break;
+
+                case OTHER:
+                case CLIENT:
+                default:
+                    // an unknown issue occurred, this could be a code error, or
+                    // a server side issue, log the issue, and either ask the
+                    // user to retry, or file a bug
+                    dialogBody = getString(R.string.error_unknown, error.getErrorMessage());
+                    break;
+            }
         }
 
-        String dialogBody = "";
-
-        if (body != null && body.getError() != null) {
-            dialogBody = body.getError().getMessage();
-        } else if (response.getError() != null) {
-            dialogBody = response.getError().getLocalizedMessage();
-        } else if (id != null) {
-            return id;
-        }
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
-        builder.setPositiveButton(R.string.error_dialog_button_text, null).
-                setTitle(R.string.error_dialog_title).setMessage(dialogBody);
-        builder.show();
-        return null;
+        new AlertDialog.Builder(getActivity())
+                .setPositiveButton(R.string.error_dialog_button_text, listener)
+                .setTitle(R.string.error_dialog_title)
+                .setMessage(dialogBody)
+                .show();
     }
 
     private void startPickerActivity(Uri data, int requestCode) {
@@ -250,17 +396,7 @@ public class SelectionFragment extends Fragment {
      * Used to inspect the response from posting an action
      */
     private interface PostResponse extends GraphObject {
-        Body getBody();
-
         String getId();
-
-        interface Body extends GraphObject {
-            Error getError();
-        }
-
-        interface Error extends GraphObject {
-            String getMessage();
-        }
     }
 
     private class EatListElement extends BaseListElement {
@@ -296,7 +432,7 @@ public class SelectionFragment extends Fragment {
         protected void populateOGAction(OpenGraphAction action) {
             if (foodChoiceUrl != null) {
                 EatAction eatAction = action.cast(EatAction.class);
-                MealGraphObject meal = GraphObjectWrapper.createGraphObject(MealGraphObject.class);
+                MealGraphObject meal = GraphObject.Factory.create(MealGraphObject.class);
                 meal.setUrl(foodChoiceUrl);
                 eatAction.setMeal(meal);
             }
@@ -452,7 +588,8 @@ public class SelectionFragment extends Fragment {
                 if (usersAsString != null) {
                     List<GraphUser> users = new ArrayList<GraphUser>(usersAsString.size());
                     for (String user : usersAsString) {
-                        GraphUser graphUser = GraphObjectWrapper.createGraphObject(new JSONObject(user), GraphUser.class);
+                        GraphUser graphUser = GraphObject.Factory
+                                .create(new JSONObject(user), GraphUser.class);
                         users.add(graphUser);
                     }
                     return users;
@@ -517,7 +654,8 @@ public class SelectionFragment extends Fragment {
             String place = savedState.getString(PLACE_KEY);
             if (place != null) {
                 try {
-                    selectedPlace = GraphObjectWrapper.createGraphObject(new JSONObject(place), GraphPlace.class);
+                    selectedPlace = GraphObject.Factory
+                            .create(new JSONObject(place), GraphPlace.class);
                     setPlaceText();
                     return true;
                 } catch (JSONException e) {

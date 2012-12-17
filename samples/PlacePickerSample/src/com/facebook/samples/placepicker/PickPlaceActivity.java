@@ -23,8 +23,8 @@ import android.os.Bundle;
 import android.support.v4.app.FragmentActivity;
 import android.support.v4.app.FragmentManager;
 import com.facebook.FacebookException;
-import com.facebook.PickerFragment;
-import com.facebook.PlacePickerFragment;
+import com.facebook.widget.PickerFragment;
+import com.facebook.widget.PlacePickerFragment;
 
 // This class provides an example of an Activity that uses PlacePickerFragment to display a list of
 // the places. It takes a layout-based approach to creating the PlacePickerFragment with the
@@ -57,7 +57,7 @@ public class PickPlaceActivity extends FragmentActivity {
 
         placePickerFragment.setOnErrorListener(new PickerFragment.OnErrorListener() {
             @Override
-            public void onError(FacebookException error) {
+            public void onError(PickerFragment<?> fragment, FacebookException error) {
                 PickPlaceActivity.this.onError(error);
             }
         });
@@ -66,7 +66,7 @@ public class PickPlaceActivity extends FragmentActivity {
         // selected (since only a single place can be selected).
         placePickerFragment.setOnSelectionChangedListener(new PickerFragment.OnSelectionChangedListener() {
             @Override
-            public void onSelectionChanged() {
+            public void onSelectionChanged(PickerFragment<?> fragment) {
                 if (placePickerFragment.getSelection() != null) {
                     finishActivity();
                 }
@@ -74,7 +74,7 @@ public class PickPlaceActivity extends FragmentActivity {
         });
         placePickerFragment.setOnDoneButtonClickedListener(new PickerFragment.OnDoneButtonClickedListener() {
             @Override
-            public void onDoneButtonClicked() {
+            public void onDoneButtonClicked(PickerFragment<?> fragment) {
                 finishActivity();
             }
         });
@@ -90,9 +90,11 @@ public class PickPlaceActivity extends FragmentActivity {
     }
 
     private void onError(Exception error) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Error").setMessage(error.getMessage()).setPositiveButton("OK", null);
-        builder.show();
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.error_dialog_title)
+                .setMessage(error.getMessage())
+                .setPositiveButton(R.string.ok_button, null)
+                .show();
     }
 
     @Override

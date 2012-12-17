@@ -1,5 +1,5 @@
-/*
- * Copyright 2010 Facebook, Inc.
+/**
+ * Copyright 2010-present Facebook
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ import com.facebook.android.Facebook.DialogListener;
 import com.facebook.android.SessionEvents.AuthListener;
 import com.facebook.android.SessionEvents.LogoutListener;
 
+@SuppressWarnings("deprecation")
 public class LoginButton extends ImageButton {
 
     private Facebook mFb;

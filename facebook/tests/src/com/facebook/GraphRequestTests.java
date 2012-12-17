@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.facebook;
 
 import android.test.suitebuilder.annotation.LargeTest;
+import com.facebook.model.GraphObject;
 
 import java.util.Date;
 
@@ -31,7 +33,7 @@ public class GraphRequestTests extends FacebookTestCase {
         GraphObject createdStatus = batchCreateAndGet(session, "me/feed", status, null, GraphObject.class);
         String statusID = (String) createdStatus.getProperty("id");
 
-        GraphObject comment = GraphObjectWrapper.createGraphObject();
+        GraphObject comment = GraphObject.Factory.create();
         final String commentMessage = "It truly is a wonderful status update.";
         comment.setProperty("message", commentMessage);
 
@@ -63,7 +65,7 @@ public class GraphRequestTests extends FacebookTestCase {
     public void testEventRoundTrip() {
         TestSession session = openTestSessionWithSharedUserAndPermissions(null, "create_event");
 
-        GraphObject event = GraphObjectWrapper.createGraphObject();
+        GraphObject event = GraphObject.Factory.create();
         // Android emulators tend to not have the right date/time. To avoid issues with posting events in the past
         // or too far in the future, we use a constant year. This test will break in 2030, angering our robot overlords.
         Date startTime = new Date(130, 2, 17, 12, 34, 56);
