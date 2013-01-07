@@ -353,8 +353,8 @@ public class WebDialog extends Dialog {
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
             Utility.logd(LOG_TAG, "Webview loading URL: " + url);
             super.onPageStarted(view, url, favicon);
-            if (!isDetached) {
-                spinner.show();
+            if (!isDetached && !WebDialog.this.isShowing()) {
+                    spinner.show();
             }
         }
 
